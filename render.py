@@ -26,6 +26,8 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
     render_npy_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders_npy")
     gts_npy_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_npy")
+    
+    print(f"model_path={model_path}")
 
     makedirs(render_npy_path, exist_ok=True)
     makedirs(gts_npy_path, exist_ok=True)
@@ -46,6 +48,7 @@ def render_set(model_path, source_path, name, iteration, views, gaussians, pipel
         else:
             gt, mask = view.get_language_feature(os.path.join(source_path, args.language_features_name), feature_level=args.feature_level)
 
+        print(f"saving rendering under {os.path.join(render_npy_path, '{0:05d}'.format(idx) + '.npy')}")
         np.save(os.path.join(render_npy_path, '{0:05d}'.format(idx) + ".npy"),rendering.permute(1,2,0).cpu().numpy())
         np.save(os.path.join(gts_npy_path, '{0:05d}'.format(idx) + ".npy"),gt.permute(1,2,0).cpu().numpy())
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))

@@ -110,62 +110,72 @@ class OpenCLIPNetwork(nn.Module):
 
 
 
-def create(image_list, data_list, save_folder):
+def create(image_list, data_list, save_folder, overwrite=False):
     assert image_list is not None, "image_list must be provided to generate features"
-    embed_size=512
-    seg_maps = []
+    # embed_size=512
+    # seg_maps = []
     total_lengths = []
     timer = 0
-    img_embeds = torch.zeros((len(image_list), 300, embed_size))
-    seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
+    # img_embeds = torch.zeros((len(image_list), 300, embed_size))
+    # seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
     mask_generator.predictor.model.to('cuda')
 
-    for i, img in tqdm(enumerate(image_list), desc="Embedding images", leave=False):
+    for i, img in tqdm(enumerate(image_list), desc="Embedding images", total=len(image_list)):
+        save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+        if os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy') and not overwrite:
+            continue
         timer += 1
         try:
-            img_embed, seg_map = _embed_clip_sam_tiles(img.unsqueeze(0), sam_encoder)
-        except:
-            raise ValueError(timer)
+            img_embed, seg_map = _embed_clip_sam_tiles(img.unsqueeze(0), sam_encoder)      
 
-        lengths = [len(v) for k, v in img_embed.items()]
-        total_length = sum(lengths)
-        total_lengths.append(total_length)
-        
-        if total_length > img_embeds.shape[1]:
-            pad = total_length - img_embeds.shape[1]
-            img_embeds = torch.cat([
-                img_embeds,
-                torch.zeros((len(image_list), pad, embed_size))
-            ], dim=1)
+            lengths = [len(v) for k, v in img_embed.items()]
+            total_length = sum(lengths)
+            total_lengths.append(total_length)
+            
+            # if total_length > img_embeds.shape[1]:
+            #     pad = total_length - img_embeds.shape[1]
+            #     img_embeds = torch.cat([
+            #         img_embeds,
+            #         torch.zeros((len(image_list), pad, embed_size))
+            #     ], dim=1)
 
-        img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
-        assert img_embed.shape[0] == total_length
-        img_embeds[i, :total_length] = img_embed
-        
-        seg_map_tensor = []
-        lengths_cumsum = lengths.copy()
-        for j in range(1, len(lengths)):
-            lengths_cumsum[j] += lengths_cumsum[j-1]
-        for j, (k, v) in enumerate(seg_map.items()):
-            if j == 0:
+            img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
+            assert img_embed.shape[0] == total_length
+            # img_embeds[i, :total_length] = img_embed
+            
+            seg_map_tensor = []
+            lengths_cumsum = lengths.copy()
+            for j in range(1, len(lengths)):
+                lengths_cumsum[j] += lengths_cumsum[j-1]
+            for j, (k, v) in enumerate(seg_map.items()):
+                if j == 0:
+                    seg_map_tensor.append(torch.from_numpy(v))
+                    continue
+                assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
+                v[v != -1] += lengths_cumsum[j-1]
                 seg_map_tensor.append(torch.from_numpy(v))
-                continue
-            assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
-            v[v != -1] += lengths_cumsum[j-1]
-            seg_map_tensor.append(torch.from_numpy(v))
-        seg_map = torch.stack(seg_map_tensor, dim=0)
-        seg_maps[i] = seg_map
+            seg_map = torch.stack(seg_map_tensor, dim=0)
+            # seg_maps[i] = seg_map
+
+            curr = {
+                'feature': img_embed,
+                'seg_maps': seg_map
+            }
+            sava_numpy(save_path, curr)
+        except:
+            print(f"Error in {data_list[i]}")
 
     mask_generator.predictor.model.to('cpu')
         
-    for i in range(img_embeds.shape[0]):
-        save_path = os.path.join(save_folder, data_list[i].split('.')[0])
-        assert total_lengths[i] == int(seg_maps[i].max() + 1)
-        curr = {
-            'feature': img_embeds[i, :total_lengths[i]],
-            'seg_maps': seg_maps[i]
-        }
-        sava_numpy(save_path, curr)
+    # for i in range(img_embeds.shape[0]):
+    #     save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+    #     assert total_lengths[i] == int(seg_maps[i].max() + 1)
+    #     print(img_embeds.shape)
+    #     curr = {
+    #         'feature': img_embeds[i, :total_lengths[i]],
+    #         'seg_maps': seg_maps[i]
+    #     }
+    #     sava_numpy(save_path, curr)
 
 def sava_numpy(save_path, data):
     save_path_s = save_path + '_s.npy'
@@ -355,7 +365,9 @@ if __name__ == '__main__':
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
     img_folder = os.path.join(dataset_path, 'images')
-    data_list = os.listdir(img_folder)
+    if not os.path.isdir(img_folder):
+        img_folder = os.path.join(dataset_path, 'color')
+    data_list = [f for f in sorted(os.listdir(img_folder))]
     data_list.sort()
 
     model = OpenCLIPNetwork(OpenCLIPNetworkConfig)

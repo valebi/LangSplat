@@ -69,6 +69,7 @@ def colormap_saving(image: torch.Tensor, colormap_options, save_path):
     )
     if save_path is not None:
         media.write_image(save_path.with_suffix(".png"), output_image, fmt="png")
+        print(f"Saved the image under {save_path}.")
     return output_image
 
 

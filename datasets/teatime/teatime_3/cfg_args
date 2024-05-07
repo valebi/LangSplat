@@ -1,0 +1,1 @@
+Namespace(data_device='cuda', eval=False, feature_level=3, images='images', language_features_name='language_features_dim3', model_path='output/lerf/teatime_3', resolution=-1, sh_degree=3, source_path='data/lerf/teatime', white_background=False)
