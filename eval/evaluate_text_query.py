@@ -225,7 +225,7 @@ def grayscale_to_plasma(image):
     return colormap(image)[:,:,:3]
 
 
-def evaluate(path, prompt,):
+def evaluate(path, prompt):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -251,6 +251,10 @@ def evaluate(path, prompt,):
     if new_p.mode != 'RGB':
         new_p = new_p.convert('RGB')
     new_p.save(f"query_result_{prompt}.png")
+
+
+def evaluate_and_plot(img_dir):
+    pass
 
 
 if __name__ == "__main__":

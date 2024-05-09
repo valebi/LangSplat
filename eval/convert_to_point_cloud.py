@@ -22,12 +22,8 @@ def map_to_pixels(point3d,w,h,projection,view, z_near=10, z_far=2000):
     p[2] = -2 * z_near * z_far / ((z_far - z_near) * p[2] - z_near - z_far)
     return p.T[:, :3].astype(int)
 
-def get_visible_points_view(point_cloud, poses, depth_images, intrinsics, vis_threshold = 2.5, color_images = None):
+def get_visible_points_view(points, poses, depth_images, intrinsics, vis_threshold = 2.5, color_images = None):
     # Initialization
-    try:
-        points = point_cloud.points
-    except:
-        points = np.concatenate([point_cloud.meshes[i].mesh.vertices for i in range(len(point_cloud.meshes))])
     X = np.append(points, np.ones((len(points),1)), axis = -1) 
     n_points = X.shape[0] 
     resolution = depth_images[0].shape
@@ -105,21 +101,20 @@ def get_visible_points_view(point_cloud, poses, depth_images, intrinsics, vis_th
             plt.savefig(f"tmp_plot_{i}.png")
         # if inside_mask.sum() > 0:
         #     print(projected_points[inside_mask].max(),  projected_points[inside_mask].min())
-        
         img2points[i] = {"indices": np.where(inside_mask)[0], "projected_points": projected_points[inside_mask]}
         
         # print(f"Image {i} has {img2points[i]['indices'].shape[0]} visible points: {img2points[i]['indices']}")
-        for point_idx in img2points[i]["indices"]:
-            if point_idx in points2img:
-                points2img[point_idx]["indices"].append(i)
-                points2img[point_idx]["projected_points"].append(projected_points[point_idx])
-            else:
-                points2img[point_idx] = {"indices": [i], "projected_points": [projected_points[point_idx]]}
+        # for point_idx in img2points[i]["indices"]:
+        #     if point_idx in points2img:
+        #         points2img[point_idx]["indices"].append(i)
+        #         points2img[point_idx]["projected_points"].append(projected_points[point_idx])
+        #     else:
+        #         points2img[point_idx] = {"indices": [i], "projected_points": [projected_points[point_idx]]}
             # print("Point", point_idx, "is visible in view", i)
 
-    for point_idx in points2img:
-        points2img[point_idx]["indices"] = np.array(points2img[point_idx]["indices"])
-        points2img[point_idx]["projected_points"] = np.array(points2img[point_idx]["projected_points"])
+    # for point_idx in points2img:
+    #     points2img[point_idx]["indices"] = np.array(points2img[point_idx]["indices"])
+    #     points2img[point_idx]["projected_points"] = np.array(points2img[point_idx]["projected_points"])
 
     print(f"[INFO] Total number of points: {n_points}")
     print("[INFO] Points per view")
@@ -127,30 +122,37 @@ def get_visible_points_view(point_cloud, poses, depth_images, intrinsics, vis_th
     print(f"[INFO] Maximum number of points per view: {np.max([img2points[i]['indices'].shape[0] for i in img2points])}")
     print(f"[INFO] Minimum number of points per view: {np.min([img2points[i]['indices'].shape[0] for i in img2points])}")
     print(f"[INFO] Median number of points per view: {np.median([img2points[i]['indices'].shape[0] for i in img2points])}")
-    print("[INFO] Views per point")
-    print(f"[INFO] Average number of views per point: {sum(points2img[i]['indices'].shape[0] for i in points2img) / len(points2img)}")
-    print(f"[INFO] Maximum number of views per point: {np.max([points2img[i]['indices'].shape[0] for i in points2img])}")
-    print(f"[INFO] Minimum number of views per point: {np.min([points2img[i]['indices'].shape[0] for i in points2img])}")
-    print(f"[INFO] Median number of views per point: {np.median([points2img[i]['indices'].shape[0] for i in points2img])}")
-    return points, points2img, img2points
+    # print("[INFO] Views per point")
+    # print(f"[INFO] Average number of views per point: {sum(points2img[i]['indices'].shape[0] for i in points2img) / max(1,len(points2img))}")
+    # print(f"[INFO] Maximum number of views per point: {np.max([points2img[i]['indices'].shape[0] for i in points2img])}")
+    # print(f"[INFO] Minimum number of views per point: {np.min([points2img[i]['indices'].shape[0] for i in points2img])}")
+    # print(f"[INFO] Median number of views per point: {np.median([points2img[i]['indices'].shape[0] for i in points2img])}")
+    return points2img, img2points
 
 
 def project_features_to_pixel(mask_features, image_masks, image_features = None, n_occurrences = None):
+    """
+    @TODO torchify
+    """
     if image_features is None:
-        image_features = np.zeros((image_masks.shape[1], image_masks.shape[2], mask_features.shape[1]))
+        image_features = np.zeros((image_masks.shape[0], image_masks.shape[1], image_masks.shape[2], mask_features.shape[1]))
     else:
         image_features[:] = 0
     if n_occurrences is None:
-        n_occurrences = np.zeros((image_masks.shape[1], image_masks.shape[2]))
+        n_occurrences = np.zeros((image_masks.shape[0], image_masks.shape[1], image_masks.shape[2]))
     else:
         n_occurrences[:] = 0
+    # @TODO if/else for few masks? Batchify?
     for mask_ix in range(len(mask_features)):
-        for level in range(len(image_masks)):
-            is_inside_mask = image_masks[level] == mask_ix
-            n_occurrences += is_inside_mask
-            image_features[is_inside_mask] += mask_features[mask_ix]
+        is_inside_mask = image_masks == mask_ix
+        n_occurrences += is_inside_mask
+        image_features[is_inside_mask] += mask_features[mask_ix]
+        # for level in range(len(image_masks)):
+        #     is_inside_mask = image_masks[level] == mask_ix
+        #     n_occurrences[level] += is_inside_mask
+        #     image_features[level][is_inside_mask] += mask_features[mask_ix]
     image_features /= np.maximum(1, n_occurrences[..., np.newaxis])
-    return image_features
+    return image_features, n_occurrences
 
 def projected_point_to_pixel(projected_points, resolution):
     height, width = resolution
@@ -199,31 +201,61 @@ def convert_to_pcd(ply_path, images_path, depth_path, feat_path, mask_path, pose
         poses = [np.loadtxt(os.path.join(poses_path, name + ".txt")) for name in common_names]
         assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
 
+    try:
+        points3D = mesh.points
+    except:
+        points3D = np.concatenate([mesh.meshes[i].mesh.vertices for i in range(len(mesh.meshes))])
+    
+    height, width, channels = images[0].shape
+    n_levels, _, _ = masks[0].shape
+
     # for image, depth_image, feature, mask, pose in zip(images, depth_images, features, masks, poses):
     #     # make sure name matches
     #     assert os.path.basename(image).split(".")[0] == os.path.basename(depth_image).split(".")[0] == os.path.basename(feature).split(".")[0] == os.path.basename(mask).split(".")[0] == os.path.basename(pose).split(".")[0]
 
     print(f"[INFO] Number of views: {len(images)}")
+    print(f"[INFO] Image dimension: {height}x{width}x{channels}")
     print(f"[INFO] Feature dimension: {features[0].shape}")
+    print(f"[INFO] Number of points: {len(points3D)}")
     print(f"[INFO] Mask dimension: {masks[0].shape}")
     print(f"[INFO] Pose dimension: {poses[0].shape}")
 
-    points3D, points2img, img2points = get_visible_points_view(mesh, poses, depth_images, intrinsics, color_images=images)
+    points2img, img2points = get_visible_points_view(points3D, poses, depth_images, intrinsics)
 
-    point_features_sum = np.empty((len(points3D), features[0].shape[1]))
-    n_observed = np.zeros(len(points3D))
-    image_feature_placeholder = np.zeros((masks[0].shape[1], masks[0].shape[2], features[0].shape[1]))
-    n_occurrences_placeholder = np.zeros((masks[0].shape[1], masks[0].shape[2]))
-    # shuffle_indices = np.random.permutation(min(20000,len(features)))
-    shuffle_indices = range(len(features))
-    for i in tqdm(shuffle_indices, desc="Projecting features to 3D points"):
-        pixel_wise_features = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
+
+    # @TODO torchify
+    point_features_sum = np.empty((n_levels, len(points3D), features[0].shape[1]), dtype=np.float16)
+    n_observed = np.zeros((n_levels, len(points3D)))
+    image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
+    n_occurrences_placeholder = np.zeros((n_levels, height, width))
+    # average features
+    for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
+        pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
+        # @TODO numpyify or torchify (.gather()?)
         for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
-            point_features_sum[index] += pixel_wise_features[position[1], position[0]]
-            n_observed[index] += 1
-    point_features_sum /= np.maximum(1, n_observed[:, None])
+            point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
+            n_observed[:, index] += n_occurrences[:, position[1], position[0]]
+    point_features_sum /= np.maximum(1, n_observed[:, :, None])
+
     print("[INFO] Point feature shape:", point_features_sum.shape)
     np.save("point_features_full.npy", point_features_sum)
+
+    raise ValueError("STOP")
+    # average colors
+    point_colors_sum = np.empty((len(points3D), 3))
+    n_observed = np.zeros(len(points3D))
+    for i in tqdm(range(len(images)), desc="Projecting colors to 3D points"):
+        for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
+            point_colors_sum[index] += images[i][position[1], position[0]]
+            n_observed[index] += 1
+    point_colors_sum /= np.maximum(1, n_observed[:, None])
+    
+    print(np.nanmax(point_colors_sum), np.nanmin(point_colors_sum))
+    # create point cloud and save it
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points3D)
+    point_cloud.colors = o3d.utility.Vector3dVector(point_colors_sum)
+    o3d.io.write_point_cloud("generated_point_cloud.ply", point_cloud)
     
 
 if __name__ == "__main__":

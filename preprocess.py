@@ -409,8 +409,8 @@ if __name__ == '__main__':
         image = torch.from_numpy(image)
         img_list.append(image)
     images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
-    imgs = torch.cat(images)
+    #imgs = torch.cat(images)
 
     save_folder = os.path.join(dataset_path, 'language_features')
     os.makedirs(save_folder, exist_ok=True)
-    create(imgs, data_list, save_folder)
+    create(images, data_list, save_folder)
