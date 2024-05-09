@@ -142,15 +142,20 @@ def project_features_to_pixel(mask_features, image_masks, image_features = None,
         n_occurrences = np.zeros((image_masks.shape[0], image_masks.shape[1], image_masks.shape[2]))
     else:
         n_occurrences[:] = 0
+    # mask_sizes = []
     # @TODO if/else for few masks? Batchify?
     for mask_ix in range(len(mask_features)):
         is_inside_mask = image_masks == mask_ix
         n_occurrences += is_inside_mask
         image_features[is_inside_mask] += mask_features[mask_ix]
         # for level in range(len(image_masks)):
+        #     mask_sizes.append((image_masks[level] == mask_ix).sum())
+        # for level in range(len(image_masks)):
         #     is_inside_mask = image_masks[level] == mask_ix
         #     n_occurrences[level] += is_inside_mask
         #     image_features[level][is_inside_mask] += mask_features[mask_ix]
+    # mask_sizes = np.array(mask_sizes) / (image_masks.shape[1] * image_masks.shape[2])
+    # print(np.histogram(mask_sizes, bins=10))
     image_features /= np.maximum(1, n_occurrences[..., np.newaxis])
     return image_features, n_occurrences
 
