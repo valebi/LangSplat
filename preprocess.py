@@ -121,12 +121,18 @@ def create(image_list, data_list, save_folder, overwrite=False):
     mask_generator.predictor.model.to('cuda')
 
     for i, img in tqdm(enumerate(image_list), desc="Embedding images", total=len(image_list)):
+        
+        print(f"Embedding {data_list[i]} ----------------------------")
         save_path = os.path.join(save_folder, data_list[i].split('.')[0])
         if os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy') and not overwrite:
             continue
         timer += 1
         try:
-            img_embed, seg_map = _embed_clip_sam_tiles(img.unsqueeze(0), sam_encoder)      
+            if img.dim() == 3:
+                _img = img.unsqueeze(0)
+            else:
+                _img = img
+            img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder)      
 
             lengths = [len(v) for k, v in img_embed.items()]
             total_length = sum(lengths)
@@ -162,7 +168,8 @@ def create(image_list, data_list, save_folder, overwrite=False):
                 'seg_maps': seg_map
             }
             sava_numpy(save_path, curr)
-        except:
+        except Exception as e:
+            raise e
             print(f"Error in {data_list[i]}")
 
     mask_generator.predictor.model.to('cpu')
@@ -188,7 +195,7 @@ def _embed_clip_sam_tiles(image, sam_encoder):
     seg_images, seg_map = sam_encoder(aug_imgs)
 
     clip_embeds = {}
-    for mode in ['default', 's', 'm', 'l']:
+    for mode in tqdm(['default', 's', 'm', 'l'], desc="applying CLIP to crops"):
         tiles = seg_images[mode]
         tiles = tiles.to("cuda")
         with torch.no_grad():
@@ -199,6 +206,7 @@ def _embed_clip_sam_tiles(image, sam_encoder):
     return clip_embeds, seg_map
 
 def get_seg_img(mask, image):
+    # bbox-based cropping of images
     image = image.copy()
     image[mask['segmentation']==0] = np.array([0, 0,  0], dtype=np.uint8)
     x,y,w,h = np.int32(mask['bbox'])
@@ -291,7 +299,7 @@ def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs)
 def masks_update(*args, **kwargs):
     # remove redundant masks based on the scores and overlap rate between masks
     masks_new = ()
-    for masks_lvl in (args):
+    for masks_lvl in tqdm(args, desc="postprocessing masks (NMS + filtering)"):
         seg_pred =  torch.from_numpy(np.stack([m['segmentation'] for m in masks_lvl], axis=0))
         iou_pred = torch.from_numpy(np.stack([m['predicted_iou'] for m in masks_lvl], axis=0))
         stability = torch.from_numpy(np.stack([m['stability_score'] for m in masks_lvl], axis=0))

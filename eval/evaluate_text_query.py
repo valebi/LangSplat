@@ -221,31 +221,41 @@ def lerf_localization(sem_map, image, clip_model, image_name, img_ann):
 def grayscale_to_plasma(image):
     image = np.array(image)
     colormap = plt.get_cmap('plasma')
-    image = image / image.max()
+    image = (image - image.min()) / (image.max() - image.min() + 1e-6)
     return colormap(image)[:,:,:3]
 
+
+def compute_sim(clip_model, features, segmentation, prompt, normalize=False):
+    prompt_embed = clip_model.encode_text([prompt], "cuda").detach().cpu().numpy()[0].T
+    
+    canonical_queries = ["object", "things", "stuff"]
+    normalization_embeddings = np.concatenate([clip_model.encode_text([q], "cuda").detach().cpu().numpy().T for q in canonical_queries], axis=1)
+    # print(f'"{prompt}": {json.dumps(list([list(p) for p in prompt_embed.astype(float)]))}')
+
+    sim = features @ prompt_embed
+    if normalize:
+        canonical_sim = np.max(features @ normalization_embeddings, axis=-1, keepdims=False)
+        sim = np.exp(sim) / (np.exp(sim) + np.exp(canonical_sim))
+
+    sim = sim.flatten()
+    sim_img = np.zeros_like(segmentation, dtype=float)[0]
+    for i in range(len(features)):
+        for j in range(len(segmentation)):
+            sim_img[(segmentation[j] == i) & (sim_img < sim[i])] = sim[i]
+    # save 
+    sim_img[sim_img == 0] = np.min(sim_img[sim_img != 0])
+    return sim_img
 
 def evaluate(path, prompt):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     # instantiate autoencoder and openclip
     clip_model = OpenCLIPNetwork(device)
 
     features = np.load(path + "_f.npy")
     segmentation = np.load(path + "_s.npy")
     
-    prompt_embed = clip_model.encode_text([prompt], "cuda").detach().cpu().numpy().T
-    import json
-    print(f'"{prompt}": {json.dumps(list([list(p) for p in prompt_embed.astype(float)]))}')
-
-    sim = features @ prompt_embed
-    sim_img = np.zeros_like(segmentation)[0]
-    for i in range(len(features)):
-        for j in range(len(segmentation)):
-            sim_img[segmentation[j] == i] = np.maximum(sim_img[segmentation[j] == i], sim[i])
-        
-    # save 
+    sim_img = compute_sim(clip_model, features, segmentation, prompt)
     sim_img = grayscale_to_plasma(sim_img)
     new_p = Image.fromarray((sim_img *255).astype(np.uint8))
     if new_p.mode != 'RGB':
@@ -253,14 +263,39 @@ def evaluate(path, prompt):
     new_p.save(f"query_result_{prompt}.png")
 
 
-def evaluate_and_plot(img_dir):
+def evaluate_comparatively(img_dir, prompt):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # instantiate autoencoder and openclip
+    clip_model = OpenCLIPNetwork(device)
+    import glob
+    features = [np.load(f) for f in glob.glob(img_dir + "/*_f.npy")]
+    segmentation = [np.load(f) for f in glob.glob(img_dir + "/*_s.npy")]
+    sim_img = [compute_sim(clip_model, features[i], segmentation[i], prompt) for i in range(len(features))]
+    sim_img = list(map(grayscale_to_plasma, sim_img))
+
+    width = len(sim_img) // 2
+    fig, axs = plt.subplots(2, width, figsize=(5*2, 5*width))
+    for i in range(width):
+        for j in range(2):
+            im = axs[i,j].imshow(sim_img[i*2 + j])
+    cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+    fig.colorbar(im, cax=cbar_ax)
+
+    fig.subplots_adjust(right=0.8)
+    plt.title(f"Normalized similarity to prompt: \n {prompt}")
+    plt.savefig(f"query_comparison_{prompt}.png")
+    #new_p = Image.fromarray((sim_img *255).astype(np.uint8))
     pass
 
 
 if __name__ == "__main__":
-    path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-colmap/language_features/246"
-    prompt = "sports field"
+    # path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-colmap/language_features/246"
+    path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/language_features/image_1"
+    prompt = "building"
     evaluate(path, prompt)
+    # prompt = "skyscraper"
+    path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/language_features"
+    evaluate_comparatively(path, prompt)
     # seed_num = 42
     # seed_everything(seed_num)
     
