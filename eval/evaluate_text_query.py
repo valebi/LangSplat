@@ -260,7 +260,7 @@ def evaluate(path, prompt):
     new_p = Image.fromarray((sim_img *255).astype(np.uint8))
     if new_p.mode != 'RGB':
         new_p = new_p.convert('RGB')
-    new_p.save(f"query_result_{prompt}.png")
+    new_p.save(f"../eval_result/query_result_{prompt}.png")
 
 
 def evaluate_comparatively(img_dir, prompt):
@@ -268,6 +268,7 @@ def evaluate_comparatively(img_dir, prompt):
     # instantiate autoencoder and openclip
     clip_model = OpenCLIPNetwork(device)
     import glob
+    images = glob.glob(img_dir.replace("language_features", "images") + "/*.png")
     features = [np.load(f) for f in glob.glob(img_dir + "/*_f.npy")]
     segmentation = [np.load(f) for f in glob.glob(img_dir + "/*_s.npy")]
     sim_img = [compute_sim(clip_model, features[i], segmentation[i], prompt) for i in range(len(features))]
@@ -277,13 +278,14 @@ def evaluate_comparatively(img_dir, prompt):
     fig, axs = plt.subplots(2, width, figsize=(5*2, 5*width))
     for i in range(width):
         for j in range(2):
+            axs[i,j].set_title(f"{images[i*2 + j].split('/')[-1].split('.')[0]}")
             im = axs[i,j].imshow(sim_img[i*2 + j])
     cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
     fig.colorbar(im, cax=cbar_ax)
 
     fig.subplots_adjust(right=0.8)
-    plt.title(f"Normalized similarity to prompt: \n {prompt}")
-    plt.savefig(f"query_comparison_{prompt}.png")
+    plt.title(f"Normalized similarity to prompt: \n '{prompt}'")
+    plt.savefig(f"../eval_result/query_comparison_{prompt}.png")
     #new_p = Image.fromarray((sim_img *255).astype(np.uint8))
     pass
 
@@ -291,11 +293,13 @@ def evaluate_comparatively(img_dir, prompt):
 if __name__ == "__main__":
     # path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-colmap/language_features/246"
     path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/language_features/image_1"
+    
     prompt = "building"
     evaluate(path, prompt)
     # prompt = "skyscraper"
     path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/language_features"
-    evaluate_comparatively(path, prompt)
+    for prompt in ["building", "trees or vegetation", "densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]:
+        evaluate_comparatively(path, prompt)
     # seed_num = 42
     # seed_everything(seed_num)
     

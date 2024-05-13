@@ -6,23 +6,29 @@ import open_clip
 
 class OpenCLIPNetwork:
     def __init__(self, device):
-        self.process = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.Resize((224, 224)),
-                torchvision.transforms.Normalize(
-                    mean=[0.48145466, 0.4578275, 0.40821073],
-                    std=[0.26862954, 0.26130258, 0.27577711],
-                ),
-            ]
-        )
-        self.clip_model_type = "ViT-B-16"
-        self.clip_model_pretrained = 'laion2b_s34b_b88k'
-        self.clip_n_dims = 512
-        model, _, _ = open_clip.create_model_and_transforms(
-            self.clip_model_type,
-            pretrained=self.clip_model_pretrained,
-            precision="fp16",
-        )
+        if True:
+            self.process = torchvision.transforms.Compose(
+                [
+                    torchvision.transforms.Resize((224, 224)),
+                    torchvision.transforms.Normalize(
+                        mean=[0.48145466, 0.4578275, 0.40821073],
+                        std=[0.26862954, 0.26130258, 0.27577711],
+                    ),
+                ]
+            )
+            self.clip_model_type = "ViT-B-16"
+            self.clip_model_pretrained = 'laion2b_s34b_b88k'
+            self.clip_n_dims = 512
+            model, _, _ = open_clip.create_model_and_transforms(
+                self.clip_model_type,
+                pretrained=self.clip_model_pretrained,
+                precision="fp16",
+            )
+        else:
+            from open_clip import create_model_from_pretrained, get_tokenizer # works on open-clip-torch>=2.23.0, timm>=0.9.8
+
+            model, self.preprocess = create_model_from_pretrained('hf-hub:timm/ViT-B-16-SigLIP')
+            self.clip_n_dims = 768
         model.eval()
         
         self.tokenizer = open_clip.get_tokenizer(self.clip_model_type)
