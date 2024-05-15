@@ -219,10 +219,22 @@ def lerf_localization(sem_map, image, clip_model, image_name, img_ann):
 
 
 def grayscale_to_plasma(image):
-    image = np.array(image)
-    colormap = plt.get_cmap('plasma')
-    image = (image - image.min()) / (image.max() - image.min() + 1e-6)
-    return colormap(image)[:,:,:3]
+    if isinstance(image, Image.Image) or isinstance(image, np.ndarray) and len(image.shape) == 2:
+        image = np.array(image)
+        image = (image - image.min()) / (image.max() - image.min() + 1e-6)
+        image = np.array(image)
+        colormap = plt.get_cmap('plasma')
+        
+        return colormap(image)[:,:,:3]
+    elif isinstance(image, list):
+        min_, max_ = min([i.min() for i in image]), max([i.max() for i in image])
+        images = [(i - min_) / (max_ - min_ + 1e-6) for i in image]
+        colormap = plt.get_cmap('plasma')
+
+        return [colormap(i)[:,:,:3] for i in images]
+    else:
+        raise ValueError("image should be either a list of np.array or a np.array")
+
 
 
 def compute_sim(clip_model, features, segmentation, prompt, normalize=False):
@@ -243,7 +255,8 @@ def compute_sim(clip_model, features, segmentation, prompt, normalize=False):
         for j in range(len(segmentation)):
             sim_img[(segmentation[j] == i) & (sim_img < sim[i])] = sim[i]
     # save 
-    sim_img[sim_img == 0] = np.min(sim_img[sim_img != 0])
+    if (sim_img == 0).sum() > 0 and (sim_img != 0).sum() > 0:
+        sim_img[sim_img == 0] = np.min(sim_img[sim_img != 0])
     return sim_img
 
 def evaluate(path, prompt):
@@ -251,6 +264,8 @@ def evaluate(path, prompt):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # instantiate autoencoder and openclip
     clip_model = OpenCLIPNetwork(device)
+
+    feature_type = path.split("/")[-2]
 
     features = np.load(path + "_f.npy")
     segmentation = np.load(path + "_s.npy")
@@ -260,46 +275,58 @@ def evaluate(path, prompt):
     new_p = Image.fromarray((sim_img *255).astype(np.uint8))
     if new_p.mode != 'RGB':
         new_p = new_p.convert('RGB')
-    new_p.save(f"../eval_result/query_result_{prompt}.png")
+    os.makedirs(f"../eval_result/evaluate_text_query/{feature_type}/", exist_ok=True)
+    new_p.save(f"../eval_result/evaluate_text_query/{feature_type}/query_result_{prompt}.png")
 
 
-def evaluate_comparatively(img_dir, prompt):
+def evaluate_comparatively(img_dir, prompt, normalize=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # instantiate autoencoder and openclip
     clip_model = OpenCLIPNetwork(device)
     import glob
-    images = glob.glob(img_dir.replace("language_features", "images") + "/*.png")
-    features = [np.load(f) for f in glob.glob(img_dir + "/*_f.npy")]
-    segmentation = [np.load(f) for f in glob.glob(img_dir + "/*_s.npy")]
-    sim_img = [compute_sim(clip_model, features[i], segmentation[i], prompt) for i in range(len(features))]
-    sim_img = list(map(grayscale_to_plasma, sim_img))
+    feature_type = img_dir.split("/")[-1]
+    images = sorted(glob.glob(img_dir.replace(feature_type, "images") + "/*.png"))
+    features = [np.load(f) for f in sorted(glob.glob(img_dir + "/*_f.npy"))]
+    segmentation = [np.load(f) for f in sorted(glob.glob(img_dir + "/*_s.npy"))]
+    sim_img = [compute_sim(clip_model, features[i], segmentation[i], prompt, normalize=normalize) for i in range(len(features))]
+    sim_img = grayscale_to_plasma(sim_img)
 
     width = len(sim_img) // 2
-    fig, axs = plt.subplots(2, width, figsize=(5*2, 5*width))
+    fig, axs = plt.subplots(2, width, figsize=(5*width, 5*2))
     for i in range(width):
         for j in range(2):
-            axs[i,j].set_title(f"{images[i*2 + j].split('/')[-1].split('.')[0]}")
-            im = axs[i,j].imshow(sim_img[i*2 + j])
+            axs[j,i].set_title(f"{images[i*2 + j].split('/')[-1].split('.')[0]}")
+            im = axs[j,i].imshow(sim_img[i*2 + j])
     cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
     fig.colorbar(im, cax=cbar_ax)
 
     fig.subplots_adjust(right=0.8)
-    plt.title(f"Normalized similarity to prompt: \n '{prompt}'")
-    plt.savefig(f"../eval_result/query_comparison_{prompt}.png")
+    if normalize:
+        plt.title(f"Exp-Normalized similarity to prompt: \n '{prompt}'")
+    else:
+        plt.title(f"Dot product with: \n '{prompt}'")
+    os.makedirs(f"../eval_result/evaluate_text_query/{feature_type}/", exist_ok=True)
+    plt.savefig(f"../eval_result/evaluate_text_query/{feature_type}/query_comparison_{prompt}.png")
     #new_p = Image.fromarray((sim_img *255).astype(np.uint8))
     pass
 
 
 if __name__ == "__main__":
     # path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-colmap/language_features/246"
-    path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/language_features/image_1"
+    feature_type = "language_features_highlight"
+    path = f"/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/{feature_type}/bad_neigh"
     
     prompt = "building"
     evaluate(path, prompt)
     # prompt = "skyscraper"
-    path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/language_features"
-    for prompt in ["building", "trees or vegetation", "densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]:
+    path = f"/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/{feature_type}"
+    prompts = ["building", "trees or vegetation", "canal, lake or the sea", "skyscraper", "bridge", "densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]
+    for prompt in prompts:
         evaluate_comparatively(path, prompt)
+    # if "highlight" in feature_type:
+    #     prompts = [f"an urban scene (highlighted: a {h})" for h in prompts]
+    #     for prompt in prompts:
+    #         evaluate_comparatively(path, prompt, normalize=True)
     # seed_num = 42
     # seed_everything(seed_num)
     

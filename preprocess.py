@@ -11,10 +11,13 @@ import cv2
 from dataclasses import dataclass, field
 from typing import Tuple, Type
 from copy import deepcopy
+from PIL import Image
 
 import torch
 import torchvision
 from torch import nn
+
+import pickle
 
 try:
     import open_clip
@@ -110,7 +113,7 @@ class OpenCLIPNetwork(nn.Module):
 
 
 
-def create(image_list, data_list, save_folder, overwrite=False):
+def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite=False, mode="bbox"):
     assert image_list is not None, "image_list must be provided to generate features"
     # embed_size=512
     # seg_maps = []
@@ -124,53 +127,61 @@ def create(image_list, data_list, save_folder, overwrite=False):
         
         print(f"Embedding {data_list[i]} ----------------------------")
         save_path = os.path.join(save_folder, data_list[i].split('.')[0])
-        if os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy') and not overwrite:
+        if not overwrite and os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy'):
             continue
         timer += 1
-        try:
-            if img.dim() == 3:
-                _img = img.unsqueeze(0)
-            else:
-                _img = img
-            img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder)      
+        # try:
+        if img.dim() == 3:
+            _img = img.unsqueeze(0)
+        else:
+            _img = img
+        if use_cached_masks:
+            feature_dir = save_folder.split("/")[-1]
+            img_cache_dir = save_path.replace(feature_dir, f"cached_masks_{feature_dir}")
+            # @TODO: actually delete cached masks, add flag 
+            # if overwrite: # remove old cache
+            #     if os.path.exists(img_cache_dir):
+            #         os.system(f"rm -rf {img_cache_dir}")
 
-            lengths = [len(v) for k, v in img_embed.items()]
-            total_length = sum(lengths)
-            total_lengths.append(total_length)
-            
-            # if total_length > img_embeds.shape[1]:
-            #     pad = total_length - img_embeds.shape[1]
-            #     img_embeds = torch.cat([
-            #         img_embeds,
-            #         torch.zeros((len(image_list), pad, embed_size))
-            #     ], dim=1)
+        img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder, level=mode, img_cache_dir=img_cache_dir)      
 
-            img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
-            assert img_embed.shape[0] == total_length
-            # img_embeds[i, :total_length] = img_embed
-            
-            seg_map_tensor = []
-            lengths_cumsum = lengths.copy()
-            for j in range(1, len(lengths)):
-                lengths_cumsum[j] += lengths_cumsum[j-1]
-            for j, (k, v) in enumerate(seg_map.items()):
-                if j == 0:
-                    seg_map_tensor.append(torch.from_numpy(v))
-                    continue
-                assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
-                v[v != -1] += lengths_cumsum[j-1]
+        lengths = [len(v) for k, v in img_embed.items()]
+        total_length = sum(lengths)
+        total_lengths.append(total_length)
+        
+        # if total_length > img_embeds.shape[1]:
+        #     pad = total_length - img_embeds.shape[1]
+        #     img_embeds = torch.cat([
+        #         img_embeds,
+        #         torch.zeros((len(image_list), pad, embed_size))
+        #     ], dim=1)
+
+        img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
+        assert img_embed.shape[0] == total_length
+        # img_embeds[i, :total_length] = img_embed
+        
+        seg_map_tensor = []
+        lengths_cumsum = lengths.copy()
+        for j in range(1, len(lengths)):
+            lengths_cumsum[j] += lengths_cumsum[j-1]
+        for j, (k, v) in enumerate(seg_map.items()):
+            if j == 0:
                 seg_map_tensor.append(torch.from_numpy(v))
-            seg_map = torch.stack(seg_map_tensor, dim=0)
-            # seg_maps[i] = seg_map
+                continue
+            assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
+            v[v != -1] += lengths_cumsum[j-1]
+            seg_map_tensor.append(torch.from_numpy(v))
+        seg_map = torch.stack(seg_map_tensor, dim=0)
+        # seg_maps[i] = seg_map
 
-            curr = {
-                'feature': img_embed,
-                'seg_maps': seg_map
-            }
-            sava_numpy(save_path, curr)
-        except Exception as e:
-            raise e
-            print(f"Error in {data_list[i]}")
+        curr = {
+            'feature': img_embed,
+            'seg_maps': seg_map
+        }
+        sava_numpy(save_path, curr)
+        # except Exception as e:
+        #     raise e
+        #     print(f"Error in {data_list[i]}")
 
     mask_generator.predictor.model.to('cpu')
         
@@ -190,28 +201,63 @@ def sava_numpy(save_path, data):
     np.save(save_path_s, data['seg_maps'].numpy())
     np.save(save_path_f, data['feature'].numpy())
 
-def _embed_clip_sam_tiles(image, sam_encoder):
+def _embed_clip_sam_tiles(image, sam_encoder, img_cache_dir=None, level="bbox"):
     aug_imgs = torch.cat([image])
-    seg_images, seg_map = sam_encoder(aug_imgs)
+    seg_images, seg_map = sam_encoder(aug_imgs, level, img_cache_dir=img_cache_dir)
 
     clip_embeds = {}
-    for mode in tqdm(['default', 's', 'm', 'l'], desc="applying CLIP to crops"):
-        tiles = seg_images[mode]
+    for level in tqdm(['default', 's', 'm', 'l'], desc="applying CLIP to crops"):
+        tiles = seg_images[level]
         tiles = tiles.to("cuda")
         with torch.no_grad():
             clip_embed = model.encode_image(tiles)
         clip_embed /= clip_embed.norm(dim=-1, keepdim=True)
-        clip_embeds[mode] = clip_embed.detach().cpu().half()
-    
+        clip_embeds[level] = clip_embed.detach().cpu().half()
+        # if mode == "highlight":
+        #     tiles_negative = seg_images[level + "_negative"]
+        #     tiles_negative = tiles_negative.to("cuda")
+        #     with torch.no_grad():
+        #         clip_embed = model.encode_image(tiles_negative)
+        #     clip_embed /= clip_embed.norm(dim=-1, keepdim=True)
+        #     clip_embeds[level] -= 0.5*clip_embed.detach().cpu().half()
+        # del seg_images[level + "_negative"]
+        # del seg_map[level + "_negative"]
+        
     return clip_embeds, seg_map
 
-def get_seg_img(mask, image):
-    # bbox-based cropping of images
-    image = image.copy()
-    image[mask['segmentation']==0] = np.array([0, 0,  0], dtype=np.uint8)
-    x,y,w,h = np.int32(mask['bbox'])
-    seg_img = image[y:y+h, x:x+w, ...]
-    return seg_img
+def get_seg_img(mask, image, mode="bbox", pad=25):
+    if mode == "bbox":
+        # bbox-based cropping of images
+        image = image.copy()
+        image[mask['segmentation']==0] = np.array([0, 0,  0], dtype=np.uint8)
+        x,y,w,h = np.int32(mask['bbox'])
+        seg_img = image[y:y+h, x:x+w, ...]
+        return seg_img
+    elif mode == "highlight":
+        image = image.copy()
+        # highlight the mask in the image
+        image[mask['segmentation']==0] = ((image[mask['segmentation']==0].astype(np.float32) + 2*255) / 3).astype(np.uint8)
+        
+        # crop to roughly the bbox + a lot of padding
+        x,y,w,h = np.int32(mask['bbox'])
+        seg_img = image[max(0, y-pad):min(image.shape[0], y+h+pad), max(0, x-pad):min(image.shape[1], x+w+pad), ...]
+        seg_mask = (mask['segmentation']==0)[max(0, y-pad):min(image.shape[0], y+h+pad), max(0, x-pad):min(image.shape[1], x+w+pad), ...]
+        contours, hierarchy = cv2.findContours((255-seg_mask*255).astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        seg_img = cv2.drawContours(seg_img, contours, -1, (255,0,0), 3)
+        
+        # if (mask['segmentation']!=0).sum() / (mask['segmentation']==0).sum() > 0.05:
+        #     pil_img = Image.fromarray(seg_img)
+        #     pil_img = pil_img.convert("RGB")
+        #     ratio = (mask['segmentation']!=0).sum() / (mask['segmentation']==0).sum()
+        #     pil_img.save(f"highlight_{ratio}.png")
+        return seg_img
+    elif mode == "highlight_negative":
+        image = image.copy()    
+        # crop to roughly the bbox + a lot of padding
+        x,y,w,h = np.int32(mask['bbox'])
+        seg_img = image[max(0, y-pad):min(image.shape[0], y+h+pad), max(0, x-pad):min(image.shape[1], x+w+pad), ...]
+        return seg_img
+    
 
 def pad_img(img):
     h, w, _ = img.shape
@@ -230,13 +276,19 @@ def filter(keep: torch.Tensor, masks_result) -> None:
         if i in keep: result_keep.append(m)
     return result_keep
 
-def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs):
+def bboxes_intersect(bbox1, bbox2):
+    x1, y1, w1, h1 = bbox1
+    x2, y2, w2, h2 = bbox2
+    return not (x1 > x2 + w2 or x2 > x1 + w1 or y1 > y2 + h2 or y2 > y1 + h1)
+
+def mask_nms(masks, scores, bboxes=None, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, quick=True, **kwargs):
     """
     Perform mask non-maximum suppression (NMS) on a set of masks based on their scores.
     
     Args:
         masks (torch.Tensor): has shape (num_masks, H, W)
         scores (torch.Tensor): The scores of the masks, has shape (num_masks,)
+        bboxes (torch.Tensor, optional): The bounding boxes of the masks, has shape (num_masks, 4).
         iou_thr (float, optional): The threshold for IoU.
         score_thr (float, optional): The threshold for the mask scores.
         inner_thr (float, optional): The threshold for the overlap rate.
@@ -250,11 +302,17 @@ def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs)
     
     masks_ord = masks[idx.view(-1), :]
     masks_area = torch.sum(masks_ord, dim=(1, 2), dtype=torch.float)
+    if bboxes is not None:
+        bboxes_ord = bboxes[idx.view(-1), :]
 
     iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
     inner_iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
+
     for i in range(num_masks):
         for j in range(i, num_masks):
+            # skip if bboxes don't intersect
+            if quick and bboxes_ord is not None and not bboxes_intersect(bboxes_ord[i], bboxes_ord[j]):
+                continue
             intersection = torch.sum(torch.logical_and(masks_ord[i], masks_ord[j]), dtype=torch.float)
             union = torch.sum(torch.logical_or(masks_ord[i], masks_ord[j]), dtype=torch.float)
             iou = intersection / union
@@ -266,6 +324,17 @@ def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs)
             if intersection / masks_area[i] >= 0.85 and intersection / masks_area[j] < 0.5:
                 inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
                 inner_iou_matrix[j, i] = inner_iou
+
+    ## tests for box-intersection shortcut
+    # for i in range(num_masks):
+    #     assert torch.where(masks_ord[i])[0].min() == bboxes_ord[i][1] and torch.where(masks_ord[i])[1].min() == bboxes_ord[i][0] 
+    #     assert torch.where(masks_ord[i])[0].max() == bboxes_ord[i][3] + bboxes_ord[i][1] and torch.where(masks_ord[i])[1].max() == bboxes_ord[i][2] + bboxes_ord[i][0]
+    
+    # for i in range(num_masks):
+    #     for j in range(i, num_masks):
+    #         if not bboxes_intersect(bboxes_ord[i], bboxes_ord[j]):
+    #             assert inner_iou_matrix[i,j] == 0
+    ## end tests
 
     iou_matrix.triu_(diagonal=1)
     iou_max, _ = iou_matrix.max(dim=0)
@@ -303,28 +372,36 @@ def masks_update(*args, **kwargs):
         seg_pred =  torch.from_numpy(np.stack([m['segmentation'] for m in masks_lvl], axis=0))
         iou_pred = torch.from_numpy(np.stack([m['predicted_iou'] for m in masks_lvl], axis=0))
         stability = torch.from_numpy(np.stack([m['stability_score'] for m in masks_lvl], axis=0))
+        bboxes = torch.from_numpy(np.stack([m['bbox'] for m in masks_lvl], axis=0))
 
         scores = stability * iou_pred
-        keep_mask_nms = mask_nms(seg_pred, scores, **kwargs)
+        keep_mask_nms = mask_nms(seg_pred, scores, bboxes=bboxes, **kwargs)
         masks_lvl = filter(keep_mask_nms, masks_lvl)
 
         masks_new += (masks_lvl,)
     return masks_new
 
-def sam_encoder(image):
+def sam_encoder(image, mode="bbox", img_cache_dir=None):
     image = cv2.cvtColor(image[0].permute(1,2,0).numpy().astype(np.uint8), cv2.COLOR_BGR2RGB)
-    # pre-compute masks
-    masks_default, masks_s, masks_m, masks_l = mask_generator.generate(image)
-    # pre-compute postprocess
-    masks_default, masks_s, masks_m, masks_l = \
-        masks_update(masks_default, masks_s, masks_m, masks_l, iou_thr=0.8, score_thr=0.7, inner_thr=0.5)
-    
-    def mask2segmap(masks, image):
+    if img_cache_dir is not None and os.path.exists(img_cache_dir):
+        masks_default, masks_s, masks_m, masks_l = pickle.load(open(os.path.join(img_cache_dir, "masks.pkl"), "rb"))
+    else:
+        # pre-compute masks
+        masks_default, masks_s, masks_m, masks_l = mask_generator.generate(image)
+        # pre-compute postprocess
+        masks_default, masks_s, masks_m, masks_l = \
+            masks_update(masks_default, masks_s, masks_m, masks_l, iou_thr=0.8, score_thr=0.7, inner_thr=0.5)
+        if img_cache_dir is not None and not os.path.exists(img_cache_dir):
+            os.makedirs(img_cache_dir, exist_ok=True)
+            pickle.dump((masks_default, masks_s, masks_m, masks_l), open(os.path.join(img_cache_dir, "masks.pkl"), "wb"))
+
+
+    def mask2segmap(masks, image, mode):
         seg_img_list = []
         seg_map = -np.ones(image.shape[:2], dtype=np.int32)
-        for i in range(len(masks)):
+        for i in tqdm(range(len(masks)), desc="generating mask crops"):
             mask = masks[i]
-            seg_img = get_seg_img(mask, image)
+            seg_img = get_seg_img(mask, image, mode=mode)
             pad_seg_img = cv2.resize(pad_img(seg_img), (224,224))
             seg_img_list.append(pad_seg_img)
 
@@ -333,15 +410,22 @@ def sam_encoder(image):
         seg_imgs = (torch.from_numpy(seg_imgs.astype("float32")).permute(0,3,1,2) / 255.0).to('cuda')
 
         return seg_imgs, seg_map
-
+    
     seg_images, seg_maps = {}, {}
-    seg_images['default'], seg_maps['default'] = mask2segmap(masks_default, image)
+    seg_images['default'], seg_maps['default'] = mask2segmap(masks_default, image, mode=mode)
     if len(masks_s) != 0:
-        seg_images['s'], seg_maps['s'] = mask2segmap(masks_s, image)
+        seg_images['s'], seg_maps['s'] = mask2segmap(masks_s, image, mode=mode)
     if len(masks_m) != 0:
-        seg_images['m'], seg_maps['m'] = mask2segmap(masks_m, image)
+        seg_images['m'], seg_maps['m'] = mask2segmap(masks_m, image, mode=mode)
     if len(masks_l) != 0:
-        seg_images['l'], seg_maps['l'] = mask2segmap(masks_l, image)
+        seg_images['l'], seg_maps['l'] = mask2segmap(masks_l, image, mode=mode)
+
+    # if mode == "highlight":
+    #     print("Creating non-highlighted crops")
+    #     for level, masks in zip(['default', 's', 'm', 'l'], [masks_default, masks_s, masks_m, masks_l]):
+    #         seg_images[level+"_negative"], seg_maps[level+"_negative"] = mask2segmap(masks, image, mode="highlight_negative")
+
+    # seg_images['original_image'] = (torch.from_numpy(np.array([cv2.resize(image, (224,224))]).astype("float32")).permute(0,3,1,2) / 255.0).to('cuda')
     
     # 0:default 1:s 2:m 3:l
     return seg_images, seg_maps
@@ -367,16 +451,37 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--resolution', type=int, default=-1)
     parser.add_argument('--sam_ckpt_path', type=str, default="ckpts/sam_vit_h_4b8939.pth")
+    parser.add_argument('--mode', type=str, default="bbox")
+    parser.add_argument('--use_cached_masks', type=bool, default=True)
+    parser.add_argument('--overwrite', type=bool, default=True)
+    # parser.add_argument('--overwrite_cache', type=bool, default=False)
     args = parser.parse_args()
     torch.set_default_dtype(torch.float32)
 
     dataset_path = args.dataset_path
     sam_ckpt_path = args.sam_ckpt_path
+    mode = args.mode
+    use_cached_masks = args.use_cached_masks
+    overwrite = args.overwrite
+    # overwrite_cache = args.overwrite_cache
+    if use_cached_masks:
+        print("[ INFO ] Using cached masks, caching new seg results on cache miss")
+        if overwrite:
+            print("[ INFO ] Overwriting existing mask cache")
+    else:
+        print("[ INFO ] Recomputing masks")
+    if overwrite:
+        print("[ INFO ] Overwriting existing features")
+    else:
+        print("[ INFO ] Recomputing all features")
+    print(f"[ INFO ] Embedding mode: {mode}")
     img_folder = os.path.join(dataset_path, 'images')
     if not os.path.isdir(img_folder):
         img_folder = os.path.join(dataset_path, 'color')
     data_list = [f for f in sorted(os.listdir(img_folder))]
     data_list.sort()
+    # random order
+    data_list = np.random.permutation(data_list).tolist()
 
     model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
     sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
@@ -419,6 +524,9 @@ if __name__ == '__main__':
     images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
     #imgs = torch.cat(images)
 
-    save_folder = os.path.join(dataset_path, 'language_features')
+    if mode == 'bbox':
+        save_folder = os.path.join(dataset_path, 'language_features')
+    else:
+        save_folder = os.path.join(dataset_path, f'language_features_{mode}')
     os.makedirs(save_folder, exist_ok=True)
-    create(images, data_list, save_folder)
+    create(images, data_list, save_folder, use_cached_masks=use_cached_masks, overwrite=overwrite, mode=mode)

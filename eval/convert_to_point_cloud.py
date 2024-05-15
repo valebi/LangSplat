@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 import open3d as o3d
+import torch
 
 import sys
 
@@ -35,14 +36,14 @@ def get_visible_points_view(points, poses, depth_images, intrinsics, vis_thresho
     # cx = 646.295044 
     # cy = 489.927032
     # intrinsics = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-    intrinsics = np.array([[ 3.75, 0.,  -0.875,  0. ],
-                           [  0.,   5.,   1.5,  0.],
-                             [  0.,   0.,  -1.01005025, -20.10050251],
-                             [  0.,   0.,  -1.,   0.]], dtype=np.float32)
+    # intrinsics = np.array([[ 3.75, 0.,  -0.875,  0. ],
+    #                        [  0.,   5.,   1.5,  0.],
+    #                          [  0.,   0.,  -1.01005025, -20.10050251],
+    #                          [  0.,   0.,  -1.,   0.]], dtype=np.float32)
 
     img2points = {}
     points2img = {}
-    projected_points = np.zeros((n_points, 2), dtype = int)
+    # projected_points = np.zeros((n_points, 2), dtype = int)
     print(f"[INFO] Computing the visible points in each view.")
     
     for i in tqdm(range(len(poses)), desc="Projecting points to views"): # for each view
@@ -76,20 +77,25 @@ def get_visible_points_view(points, poses, depth_images, intrinsics, vis_thresho
                                     vis_threshold).astype(bool)
         
         inside_mask[inside_mask == True] = visibility_mask
+        inside_points = projected_points[inside_mask]
         if color_images is not None and i % 10 == 0:
             import matplotlib.pyplot as plt
             # plt.subplot(1,3,1)
             # plt.scatter(projected_points[mask][:,0], projected_points[mask][:,1], c=point_depth[mask])
             # plt.colorbar()     
             error = np.abs(depth_images[i][pi[1][inside_mask], pi[0][inside_mask]]
-                                    - point_depth[inside_mask])      
+                                    - point_depth[inside_mask])  
+            # plt.subplot(2,2,1)
+            # plt.scatter(inside_points[:,0], -inside_points[:,1], c=error)
+            # plt.colorbar()
+            blurred = cv2.blur(color_images[i], (5,5))  
+            colors = [np.array(blurred).astype(float)[position[1], position[0]] / 255 for position in inside_points] 
             plt.subplot(2,2,1)
-            plt.scatter(projected_points[inside_mask][:,0], -projected_points[inside_mask][:,1], c=error)
-            plt.colorbar()
+            plt.scatter(inside_points[:,0], -inside_points[:,1], c=colors, s=5)
             # fix aspect ratio
             plt.gca().set_aspect('equal', adjustable='box')
             plt.subplot(2,2,2)
-            plt.scatter(projected_points[inside_mask][:,0], -projected_points[inside_mask][:,1], c=point_depth[inside_mask])
+            plt.scatter(inside_points[:,0], -inside_points[:,1], c=point_depth[inside_mask], s=5)
             plt.colorbar()
             # fix aspect ratio
             plt.gca().set_aspect('equal', adjustable='box')
@@ -99,9 +105,11 @@ def get_visible_points_view(points, poses, depth_images, intrinsics, vis_thresho
             plt.subplot(2,2,4)
             plt.imshow(color_images[i])
             plt.savefig(f"tmp_plot_{i}.png")
+            # clear
+            plt.clf()
         # if inside_mask.sum() > 0:
-        #     print(projected_points[inside_mask].max(),  projected_points[inside_mask].min())
-        img2points[i] = {"indices": np.where(inside_mask)[0], "projected_points": projected_points[inside_mask]}
+        #     print(inside_points.max(),  inside_points.min())
+        img2points[i] = {"indices": np.arange(0, len(projected_points))[inside_mask], "projected_points": inside_points}
         
         # print(f"Image {i} has {img2points[i]['indices'].shape[0]} visible points: {img2points[i]['indices']}")
         # for point_idx in img2points[i]["indices"]:
@@ -116,6 +124,7 @@ def get_visible_points_view(points, poses, depth_images, intrinsics, vis_thresho
     #     points2img[point_idx]["indices"] = np.array(points2img[point_idx]["indices"])
     #     points2img[point_idx]["projected_points"] = np.array(points2img[point_idx]["projected_points"])
 
+    #@TODO dict is not a scalable enough data structure it seems
     print(f"[INFO] Total number of points: {n_points}")
     print("[INFO] Points per view")
     print(f"[INFO] Average number of points per view: {sum(img2points[i]['indices'].shape[0] for i in img2points) / len(img2points)}")
@@ -159,6 +168,32 @@ def project_features_to_pixel(mask_features, image_masks, image_features = None,
     image_features /= np.maximum(1, n_occurrences[..., np.newaxis])
     return image_features, n_occurrences
 
+def project_features_to_pixel_torch(mask_features, image_masks, image_features = None, n_occurrences = None):
+    """exactly the same in torch"""
+    if image_features is None:
+        image_features = torch.zeros((image_masks.shape[0], image_masks.shape[1], image_masks.shape[2], mask_features.shape[1]))
+    else:
+        image_features[:] = 0
+    if n_occurrences is None:
+        n_occurrences = torch.zeros((image_masks.shape[0], image_masks.shape[1], image_masks.shape[2]))
+    else:
+        n_occurrences[:] = 0
+    for mask_ix in range(len(mask_features)):
+        is_inside_mask = image_masks == mask_ix
+        n_occurrences += is_inside_mask
+        image_features[is_inside_mask] += mask_features[mask_ix]
+
+    is_inside_mask2 = image_masks[..., None] == torch.arange(mask_features.shape[0])[None, None, None, :]
+    n_occurrences2 = is_inside_mask2.sum(dim=(3,)) 
+    image_features2 = torch.zeros((image_masks.shape[0], image_masks.shape[1], image_masks.shape[2], mask_features.shape[1]))
+    image_features2[is_inside_mask2] = mask_features
+    image_features2 /= torch.clamp(n_occurrences2[..., None], min=1)
+    assert torch.allclose(image_features, image_features2)
+
+    image_features /= torch.clamp(n_occurrences[..., None], min=1)
+    return image_features, n_occurrences
+
+
 def projected_point_to_pixel(projected_points, resolution):
     height, width = resolution
     projected_points = projected_points.astype(int)
@@ -173,10 +208,24 @@ def extract_averaged_point_features(pixel_wise_features, points2img):
     return averaged_features
 
 
-def convert_to_pcd(ply_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path):
+def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(1e6)):
+    np.random.seed(42)
     print("[INFO] Loading the data..")
     # mesh = o3d.io.read_point_cloud(ply_path)
-    mesh = o3d.io.read_triangle_model("/home/bieriv/openmask3d_valentin/OpenCity/data/brooklyn-bridge-obj/brooklyn-bridge.obj")
+    mesh = o3d.io.read_triangle_model(obj_path)
+    try:
+        points3D = mesh.points
+    except:
+        try:
+            points3D = np.concatenate([mesh.meshes[i].mesh.vertices for i in range(len(mesh.meshes))])
+        except ValueError:
+            mesh =  o3d.io.read_triangle_mesh(obj_path)
+            points3D = mesh.vertices
+    if len(points3D) > max_points:
+        # randomly subsample points
+        points3D = points3D[np.random.choice(len(points3D), max_points, replace=False)]
+
+
     images = [cv2.imread(path) for path in tqdm(sorted(glob.glob(os.path.join(images_path, "*.jpg"))), desc="Loading images")]
     depth_images = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(depth_path, "*.npy"))), desc="Loading depth images")]
     features = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*.npy"))), desc="Loading features")]
@@ -189,8 +238,14 @@ def convert_to_pcd(ply_path, images_path, depth_path, feat_path, mask_path, pose
         masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*_s.npy"))), desc="Reloading masks")]
         features = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*_f.npy"))), desc="Reloading features")]
 
-    if not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
+    if full_embeddings_mode and full_embedding_path is not None:
+        full_embeddings = np.load(os.path.join(full_embedding_path, "embeddings.npy"))
+        masks = [np.zeros((1,) + i.shape[:2], dtype=int) for i in images]
+        features = [np.expand_dims(full_embeddings[i], 0) for i in range(len(images))] 
+    elif not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
         print("Warning: Number of images, depth images, features, masks and poses do not match")
+        if full_embeddings_mode:
+            raise ValueError("Full embeddings mode is not supported when the number of images, depth images, features, masks and poses do not match")
         # only keep the ones that have all the data: match based on names
         image_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(images_path, "*.jpg")))]
         depth_image_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(depth_path, "*.npy")))]
@@ -206,10 +261,6 @@ def convert_to_pcd(ply_path, images_path, depth_path, feat_path, mask_path, pose
         poses = [np.loadtxt(os.path.join(poses_path, name + ".txt")) for name in common_names]
         assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
 
-    try:
-        points3D = mesh.points
-    except:
-        points3D = np.concatenate([mesh.meshes[i].mesh.vertices for i in range(len(mesh.meshes))])
     
     height, width, channels = images[0].shape
     n_levels, _, _ = masks[0].shape
@@ -227,49 +278,62 @@ def convert_to_pcd(ply_path, images_path, depth_path, feat_path, mask_path, pose
 
     points2img, img2points = get_visible_points_view(points3D, poses, depth_images, intrinsics)
 
+    if True:
+        # average colors
+        point_colors_sum = np.empty((len(points3D), 3))
+        n_observed = np.zeros(len(points3D))
+        for i in tqdm(range(len(images)), desc="Projecting colors to 3D points"):
+            for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
+                point_colors_sum[index] += images[i][position[1], position[0]] / 255.0
+                n_observed[index] += 1
+        point_colors_sum /= np.maximum(1, n_observed[:, None])
+        
+        print(np.nanmax(point_colors_sum), np.nanmin(point_colors_sum))
+        # create point cloud and save it
+        point_cloud = o3d.geometry.PointCloud()
+        point_cloud.points = o3d.utility.Vector3dVector(points3D)
+        point_cloud.colors = o3d.utility.Vector3dVector(point_colors_sum)
+        assert point_cloud.has_points()
+        assert point_cloud.has_colors()
+        o3d.io.write_point_cloud("generated_point_cloud.ply", point_cloud)
 
-    # @TODO torchify
-    point_features_sum = np.empty((n_levels, len(points3D), features[0].shape[1]), dtype=np.float16)
-    n_observed = np.zeros((n_levels, len(points3D)))
-    image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
-    n_occurrences_placeholder = np.zeros((n_levels, height, width))
-    # average features
-    for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
-        pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
-        # @TODO numpyify or torchify (.gather()?)
-        for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
-            point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
-            n_observed[:, index] += n_occurrences[:, position[1], position[0]]
-    point_features_sum /= np.maximum(1, n_observed[:, :, None])
-
-    print("[INFO] Point feature shape:", point_features_sum.shape)
-    np.save("point_features_full.npy", point_features_sum)
-
-    raise ValueError("STOP")
-    # average colors
-    point_colors_sum = np.empty((len(points3D), 3))
-    n_observed = np.zeros(len(points3D))
-    for i in tqdm(range(len(images)), desc="Projecting colors to 3D points"):
-        for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
-            point_colors_sum[index] += images[i][position[1], position[0]]
-            n_observed[index] += 1
-    point_colors_sum /= np.maximum(1, n_observed[:, None])
     
-    print(np.nanmax(point_colors_sum), np.nanmin(point_colors_sum))
-    # create point cloud and save it
-    point_cloud = o3d.geometry.PointCloud()
-    point_cloud.points = o3d.utility.Vector3dVector(points3D)
-    point_cloud.colors = o3d.utility.Vector3dVector(point_colors_sum)
-    o3d.io.write_point_cloud("generated_point_cloud.ply", point_cloud)
-    
+    # @TODO torchify and batchify
+    if True:
+        point_features_sum = np.empty((n_levels, len(points3D), features[0].shape[1]), dtype=np.float16)
+        n_observed = np.zeros((n_levels, len(points3D)))
+        image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
+        n_occurrences_placeholder = np.zeros((n_levels, height, width))
+        # average features
+        for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
+            # @TODO double gather, don't go via pixel
+            pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
+            # @TODO numpyify or torchify (.gather()?)
+            for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
+                point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
+                n_observed[:, index] += n_occurrences[:, position[1], position[0]]
+        point_features_sum /= np.maximum(1, n_observed[:, :, None])
+
+        print("[INFO] Point feature shape:", point_features_sum.shape)
+        np.save("point_features_full.npy", point_features_sum)
+
 
 if __name__ == "__main__":
-    base_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge/"
-    convert_to_pcd(ply_path = base_path + "scene_example.ply", #"scene_example_downsampled.ply",
+    if False:
+        base_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge/"
+        obj_path = "/home/bieriv/openmask3d_valentin/OpenCity/data/brooklyn-bridge-obj/brooklyn-bridge.obj"
+        full_embeddings_mode = False
+    else:
+        obj_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
+        base_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh-output/"
+        full_embeddings_mode = True
+    convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
                     images_path= base_path + "color",
                     depth_path = base_path + "depth",
                     feat_path = base_path + "language_features",
                     mask_path = base_path + "language_features",
+                    full_embedding_path = base_path + "full_image_embeddings",
                     poses_path = base_path + "pose",
-                    intrinsics_path = base_path + "intrinsic/intrinsic_color.txt",
-                    output_path = "semantic_point_cloud.ply")
+                    intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
+                    output_path = "semantic_point_cloud.ply",
+                    full_embeddings_mode = full_embeddings_mode)

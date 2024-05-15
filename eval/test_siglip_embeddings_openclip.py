@@ -5,17 +5,20 @@ from PIL import Image
 from open_clip import create_model_from_pretrained, get_tokenizer, create_model_and_transforms # works on open-clip-torch>=2.23.0, timm>=0.9.8
 import glob
 import matplotlib.pyplot as plt
+import math
 
 if __name__ == "__main__":
-    image_paths = sorted(glob.glob("/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/images/*.png"))
+    # image_paths = sorted(glob.glob("/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/images/*.png"))
+    image_paths = sorted(glob.glob("/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples-highlighted/*.png"))
     images = [Image.open(img).resize((224, 224)).convert('RGB') for img in image_paths]
-    texts = ["densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]
+    # texts = ["densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]
+    texts = [f"an urban scene (highlighted: a {h})" for h in["sports field", "building", "lake / sea / water", "group of bushes", "road"]]
 
 
     siglip = False
     if siglip:
-        checkpoint = 'hf-hub:timm/ViT-B-16-SigLIP'
-        # checkpoint = 'hf-hub:timm/ViT-SO400M-14-SigLIP-384'
+        # checkpoint = 'hf-hub:timm/ViT-B-16-SigLIP'
+        checkpoint = 'hf-hub:timm/ViT-SO400M-14-SigLIP-384'
         model, preprocess = create_model_from_pretrained(checkpoint)
         tokenizer = get_tokenizer('hf-hub:timm/ViT-B-16-SigLIP')
         texts_tok = tokenizer(texts, context_length=model.context_length)
@@ -51,9 +54,9 @@ if __name__ == "__main__":
     # plot the raw images in a nx2 grid for reference
     for i, path in enumerate(image_paths):
         img = Image.open(path)
-        plt.subplot(len(image_paths)//2, 2, i+1)
+        plt.subplot(math.ceil(len(image_paths)/2), 2, i+1)
         plt.imshow(img)
-        plt.title(path.split('/')[-1].split(".")[0])
+        plt.title(path.split('/')[-1].split(".")[-2])
     plt.savefig("eval_result/raw_images.png")
 
 
@@ -62,7 +65,7 @@ if __name__ == "__main__":
     cax = ax.matshow(text_probs.cpu().numpy(), cmap='hot')
     # label axes 
     ax.set_yticklabels([""] + texts)
-    ax.set_xticklabels([""]+[path.split('/')[-1].split(".")[0] for path in image_paths])
+    ax.set_xticklabels([""]+[path.split('/')[-1].split(".")[-2] for path in image_paths])
     # angle 
     plt.xticks(rotation=45, rotation_mode="anchor")
     print()
