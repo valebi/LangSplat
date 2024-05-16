@@ -15,5 +15,6 @@ release
 *.zip
 *.out
 *.npy
+*.ply
 eval_result
 ckpts
