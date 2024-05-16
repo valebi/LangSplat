@@ -11,9 +11,9 @@ tensorboard_3d
 events.out*
 ckpt
 release
-**/*.pth
-**/*.zip
-**/*.out
-**/*.npy
+*.pth
+*.zip
+*.out
+*.npy
 eval_result
 ckpts
