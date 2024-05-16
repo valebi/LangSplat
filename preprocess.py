@@ -130,58 +130,57 @@ def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite
         if not overwrite and os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy'):
             continue
         timer += 1
-        # try:
-        if img.dim() == 3:
-            _img = img.unsqueeze(0)
-        else:
-            _img = img
-        if use_cached_masks:
-            feature_dir = save_folder.split("/")[-1]
-            img_cache_dir = save_path.replace(feature_dir, f"cached_masks_{feature_dir}")
-            # @TODO: actually delete cached masks, add flag 
-            # if overwrite: # remove old cache
-            #     if os.path.exists(img_cache_dir):
-            #         os.system(f"rm -rf {img_cache_dir}")
+        try:
+            if img.dim() == 3:
+                _img = img.unsqueeze(0)
+            else:
+                _img = img
+            if use_cached_masks:
+                feature_dir = save_folder.split("/")[-1]
+                img_cache_dir = save_path.replace(feature_dir, f"cached_masks_{feature_dir}")
+                # @TODO: actually delete cached masks, add flag 
+                # if overwrite: # remove old cache
+                #     if os.path.exists(img_cache_dir):
+                #         os.system(f"rm -rf {img_cache_dir}")
 
-        img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder, level=mode, img_cache_dir=img_cache_dir)      
+            img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder, level=mode, img_cache_dir=img_cache_dir)      
 
-        lengths = [len(v) for k, v in img_embed.items()]
-        total_length = sum(lengths)
-        total_lengths.append(total_length)
-        
-        # if total_length > img_embeds.shape[1]:
-        #     pad = total_length - img_embeds.shape[1]
-        #     img_embeds = torch.cat([
-        #         img_embeds,
-        #         torch.zeros((len(image_list), pad, embed_size))
-        #     ], dim=1)
+            lengths = [len(v) for k, v in img_embed.items()]
+            total_length = sum(lengths)
+            total_lengths.append(total_length)
+            
+            # if total_length > img_embeds.shape[1]:
+            #     pad = total_length - img_embeds.shape[1]
+            #     img_embeds = torch.cat([
+            #         img_embeds,
+            #         torch.zeros((len(image_list), pad, embed_size))
+            #     ], dim=1)
 
-        img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
-        assert img_embed.shape[0] == total_length
-        # img_embeds[i, :total_length] = img_embed
-        
-        seg_map_tensor = []
-        lengths_cumsum = lengths.copy()
-        for j in range(1, len(lengths)):
-            lengths_cumsum[j] += lengths_cumsum[j-1]
-        for j, (k, v) in enumerate(seg_map.items()):
-            if j == 0:
+            img_embed = torch.cat([v for k, v in img_embed.items()], dim=0)
+            assert img_embed.shape[0] == total_length
+            # img_embeds[i, :total_length] = img_embed
+            
+            seg_map_tensor = []
+            lengths_cumsum = lengths.copy()
+            for j in range(1, len(lengths)):
+                lengths_cumsum[j] += lengths_cumsum[j-1]
+            for j, (k, v) in enumerate(seg_map.items()):
+                if j == 0:
+                    seg_map_tensor.append(torch.from_numpy(v))
+                    continue
+                assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
+                v[v != -1] += lengths_cumsum[j-1]
                 seg_map_tensor.append(torch.from_numpy(v))
-                continue
-            assert v.max() == lengths[j] - 1, f"{j}, {v.max()}, {lengths[j]-1}"
-            v[v != -1] += lengths_cumsum[j-1]
-            seg_map_tensor.append(torch.from_numpy(v))
-        seg_map = torch.stack(seg_map_tensor, dim=0)
-        # seg_maps[i] = seg_map
+            seg_map = torch.stack(seg_map_tensor, dim=0)
+            # seg_maps[i] = seg_map
 
-        curr = {
-            'feature': img_embed,
-            'seg_maps': seg_map
-        }
-        sava_numpy(save_path, curr)
-        # except Exception as e:
-        #     raise e
-        #     print(f"Error in {data_list[i]}")
+            curr = {
+                'feature': img_embed,
+                'seg_maps': seg_map
+            }
+            sava_numpy(save_path, curr)
+        except Exception as e:
+            print(f"Error in {data_list[i]}: {e}")
 
     mask_generator.predictor.model.to('cpu')
         
