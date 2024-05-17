@@ -208,7 +208,7 @@ def extract_averaged_point_features(pixel_wise_features, points2img):
     return averaged_features
 
 
-def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(1e6)):
+def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(3*1e6)):
     np.random.seed(42)
     print("[INFO] Loading the data..")
     # mesh = o3d.io.read_point_cloud(ply_path)
@@ -242,7 +242,7 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         full_embeddings = np.load(os.path.join(full_embedding_path, "embeddings.npy"))
         masks = [np.zeros((1,) + i.shape[:2], dtype=int) for i in images]
         features = [np.expand_dims(full_embeddings[i], 0) for i in range(len(images))] 
-    elif not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
+    elif True or not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
         print("Warning: Number of images, depth images, features, masks and poses do not match")
         if full_embeddings_mode:
             raise ValueError("Full embeddings mode is not supported when the number of images, depth images, features, masks and poses do not match")
@@ -278,9 +278,38 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
 
     points2img, img2points = get_visible_points_view(points3D, poses, depth_images, intrinsics)
 
+    
+    # @TODO torchify and batchify
+    if True:
+        point_features_sum = np.empty((n_levels, len(points3D), features[0].shape[1]), dtype=np.float16)
+        n_observed = np.zeros((n_levels, len(points3D)))
+        image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
+        n_occurrences_placeholder = np.zeros((n_levels, height, width))
+        # average features
+        for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
+            # @TODO double gather, don't go via pixel
+            # pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
+            # @TODO numpyify or torchify (.gather()?)
+            for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
+                mask_ix = masks[i][:, position[1], position[0]]
+                feat = features[i][mask_ix] * (mask_ix != -1)[: , None]
+                # assert (pixel_wise_features[:, position[1], position[0]] == feat).all()
+                # assert ((n_occurrences[:, position[1], position[0]]).astype(bool) == (mask_ix != -1)).all()
+                # point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
+                # n_observed[:, index] += n_occurrences[:, position[1], position[0]]
+                point_features_sum[:, index] += feat
+                n_observed[:, index] += (mask_ix != -1)
+        point_features_sum /= np.maximum(1, n_observed[:, :, None])
+
+        print("[INFO] Point feature shape:", point_features_sum.shape)
+        if "highlight" in feat_path:
+            np.save("point_features_highlight.npy", point_features_sum)
+        else:
+            np.save("point_features_full.npy", point_features_sum)
+
     if True:
         # average colors
-        point_colors_sum = np.empty((len(points3D), 3))
+        point_colors_sum = np.zeros((len(points3D), 3), dtype=np.float32)
         n_observed = np.zeros(len(points3D))
         for i in tqdm(range(len(images)), desc="Projecting colors to 3D points"):
             for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
@@ -297,31 +326,15 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         assert point_cloud.has_colors()
         o3d.io.write_point_cloud("generated_point_cloud.ply", point_cloud)
 
-    
-    # @TODO torchify and batchify
-    if True:
-        point_features_sum = np.empty((n_levels, len(points3D), features[0].shape[1]), dtype=np.float16)
-        n_observed = np.zeros((n_levels, len(points3D)))
-        image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
-        n_occurrences_placeholder = np.zeros((n_levels, height, width))
-        # average features
-        for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
-            # @TODO double gather, don't go via pixel
-            pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
-            # @TODO numpyify or torchify (.gather()?)
-            for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
-                point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
-                n_observed[:, index] += n_occurrences[:, position[1], position[0]]
-        point_features_sum /= np.maximum(1, n_observed[:, :, None])
-
-        print("[INFO] Point feature shape:", point_features_sum.shape)
-        np.save("point_features_full.npy", point_features_sum)
-
 
 if __name__ == "__main__":
     if False:
         base_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge/"
-        obj_path = "/home/bieriv/openmask3d_valentin/OpenCity/data/brooklyn-bridge-obj/brooklyn-bridge.obj"
+        obj_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-obj/brooklyn-bridge.obj"
+        full_embeddings_mode = False
+    elif True:
+        base_path = "/home/bieriv/LangSplat/LangSplat/data/rotterdam-output/"
+        obj_path = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
         full_embeddings_mode = False
     else:
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
@@ -330,8 +343,8 @@ if __name__ == "__main__":
     convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
                     images_path= base_path + "color",
                     depth_path = base_path + "depth",
-                    feat_path = base_path + "language_features",
-                    mask_path = base_path + "language_features",
+                    feat_path = base_path + "language_features_highlight",
+                    mask_path = base_path + "language_features_highlight",
                     full_embedding_path = base_path + "full_image_embeddings",
                     poses_path = base_path + "pose",
                     intrinsics_path = base_path + "intrinsic/projection_matrix.txt",

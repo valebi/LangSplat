@@ -18,12 +18,36 @@ import torchvision
 from torch import nn
 
 import pickle
-
+from open_clip import create_model_from_pretrained, get_tokenizer, create_model_and_transforms # works on open-clip-torch>=2.23.0, timm>=0.9.8
 try:
     import open_clip
 except ImportError:
     assert False, "open_clip is not installed, install it with `pip install open-clip-torch`"
 
+
+class SigLipNetwork:
+    def __init__(self, device):
+        self.checkpoint = 'hf-hub:timm/ViT-SO400M-14-SigLIP-384'
+        self.model, self.preprocess = create_model_from_pretrained(self.checkpoint)
+        self.tokenizer = get_tokenizer('hf-hub:timm/ViT-B-16-SigLIP')
+        self.model = self.model.to(device)
+        self.model.half().eval()
+        self.device = device
+        self.clip_n_dims = 1152
+
+    def encode_text(self, texts):
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            return self.model.encode_text(self.tokenizer(texts, context_length=model.context_length))
+    
+    def encode_image(self,images, batch_size=128):
+        pil_images =  [Image.fromarray((i*255).detach().cpu().numpy().transpose(1,2, 0).astype(np.uint8)) for i in images] # ugly af
+        torch_images = torch.stack(list(map(self.preprocess, pil_images)), axis=0).half().to(self.device)
+
+        embeddings = []
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            for i in range(0, len(images), batch_size):
+                embeddings.append(self.model.encode_image(torch_images[i:i+batch_size]))
+        return torch.cat(embeddings, axis=0)
 
 @dataclass
 class OpenCLIPNetworkConfig:
@@ -105,9 +129,13 @@ class OpenCLIPNetwork(nn.Module):
         best_id = softmax[..., 0].argmin(dim=1)  # rays x 2
         return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.negatives), 2))[:, 0, :]
 
-    def encode_image(self, input):
+    def encode_image(self, input, batch_size=128):
         processed_input = self.process(input).half()
-        return self.model.encode_image(processed_input)
+        embeddings = []
+        with torch.no_grad():
+            for i in range(0, len(input), batch_size):
+                embeddings.append(self.model.encode_image(processed_input[i:i + batch_size]))
+        return torch.cat(embeddings, axis=0)
 
 
 
@@ -142,6 +170,8 @@ def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite
                 # if overwrite: # remove old cache
                 #     if os.path.exists(img_cache_dir):
                 #         os.system(f"rm -rf {img_cache_dir}")
+            else:
+                img_cache_dir = None
 
             img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder, level=mode, img_cache_dir=img_cache_dir)      
 
@@ -376,6 +406,10 @@ def masks_update(*args, **kwargs):
         scores = stability * iou_pred
         keep_mask_nms = mask_nms(seg_pred, scores, bboxes=bboxes, **kwargs)
         masks_lvl = filter(keep_mask_nms, masks_lvl)
+        for mask in masks_lvl:
+            for key in list(masks_lvl[0].keys()):
+                if key not in ['segmentation', 'predicted_iou', 'stability_score', 'bbox']:
+                    del mask[key]
 
         masks_new += (masks_lvl,)
     return masks_new
@@ -403,7 +437,7 @@ def sam_encoder(image, mode="bbox", img_cache_dir=None):
             seg_img = get_seg_img(mask, image, mode=mode)
             pad_seg_img = cv2.resize(pad_img(seg_img), (224,224))
             seg_img_list.append(pad_seg_img)
-
+            # @TODO rewrite this to be more storage efficient (one single image of indices)
             seg_map[masks[i]['segmentation']] = i
         seg_imgs = np.stack(seg_img_list, axis=0) # b,H,W,3
         seg_imgs = (torch.from_numpy(seg_imgs.astype("float32")).permute(0,3,1,2) / 255.0).to('cuda')
@@ -450,9 +484,10 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--resolution', type=int, default=-1)
     parser.add_argument('--sam_ckpt_path', type=str, default="ckpts/sam_vit_h_4b8939.pth")
-    parser.add_argument('--mode', type=str, default="bbox")
-    parser.add_argument('--use_cached_masks', type=bool, default=True)
-    parser.add_argument('--overwrite', type=bool, default=True)
+    parser.add_argument('--mode', type=str, default="highlight")
+    parser.add_argument('--use_cached_masks', type=bool, default=False)
+    parser.add_argument('--overwrite', type=bool, default=False)
+    parser.add_argument('--model', type=str, default="siglip")
     # parser.add_argument('--overwrite_cache', type=bool, default=False)
     args = parser.parse_args()
     torch.set_default_dtype(torch.float32)
@@ -482,7 +517,7 @@ if __name__ == '__main__':
     # random order
     data_list = np.random.permutation(data_list).tolist()
 
-    model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
+    model = OpenCLIPNetwork(OpenCLIPNetworkConfig) if args.model == "clip" else SigLipNetwork("cuda")
     sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,

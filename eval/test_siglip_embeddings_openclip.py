@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-from urllib.request import urlopen
 from PIL import Image
 from open_clip import create_model_from_pretrained, get_tokenizer, create_model_and_transforms # works on open-clip-torch>=2.23.0, timm>=0.9.8
 import glob

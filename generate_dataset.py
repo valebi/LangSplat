@@ -14,7 +14,8 @@ if platform.system() == "Linux":
 # Create a scene
 # file = "data/brooklyn-bridge.ply"
 #file = "C:/MSC-Data/OpenCityData/brooklyn-bridge-obj/brooklyn-bridge.obj"
-file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
+# file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
+file = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
 #ile = "C:/MSC-Data/OpenCityData/brooklyn-bridge-ply/brooklyn-bridge.ply"
 if False:
     import open3d as o3d
@@ -22,7 +23,9 @@ if False:
     # model = o3d.visualization.rendering.TriangleMeshModel(mesh)
     o3d.visualization.draw_geometries([mesh])
 # output_path = "data/brooklyn-bridge"
-output_path = "data/buenos-aires-2-smaller-mesh-output"
+# output_path = "data/buenos-aires-2-smaller-mesh-out
+# put"
+output_path = "data/rotterdam-output"
 width = 384
 height = 384
 
@@ -57,11 +60,11 @@ renderer = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=heig
 
 bounds  = scene.bounds
 border = 300
-xrange = [45, 75] # vertical angle (90 means bird view / satellite and 0 means horizontal / street view)
+xrange = [45, 65] # vertical angle (90 means bird view / satellite and 0 means horizontal / street view)
 yrange = [0, 360] # horizontal angle, we want to go round round round
-height_range = [200, 500]
+height_range = [100, 150]
 n_retries = 7
-max_n_samples = 20000
+max_n_samples = 2000
 
 counter = 0
 
@@ -77,10 +80,13 @@ reuse_pose = False
 if not reuse_pose:
     for x_pos in tqdm(np.linspace(bounds[0,0]+border, bounds[1,0]-border, int(np.sqrt(max_n_samples)))):
         for z_pos in np.linspace(bounds[0,2]+border, bounds[1,2]-border, int(np.sqrt(max_n_samples))):
+            if os.path.exists(f"{output_path}/depth/{counter}.npy"):
+                counter += 1
+                continue
             for i in range(n_retries):
                 random_height = np.random.randint(height_range[0], height_range[1])
                 y_angle = np.random.randint(yrange[0], yrange[1])
-                x_angle = 90 if np.random.rand() < 0.3 else np.random.randint(xrange[0], xrange[1])
+                x_angle = 90 if np.random.rand() < 0.1 else np.random.randint(xrange[0], xrange[1])
                 z_angle = 0
                 x_pos += np.random.randint(-border//2, border//2)
                 z_pos += np.random.randint(-border//2, border//2)
