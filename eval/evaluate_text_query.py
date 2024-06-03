@@ -21,7 +21,7 @@ import sys
 sys.path.append("..")
 import colormaps
 from autoencoder.model import Autoencoder
-from openclip_encoder import OpenCLIPNetwork
+from openclip_encoder import OpenCLIPNetwork, SigLipNetwork
 from utils import smooth, colormap_saving, vis_mask_save, polygon_to_mask, stack_mask, show_result
 import matplotlib.pyplot as plt
 
@@ -238,10 +238,10 @@ def grayscale_to_plasma(image):
 
 
 def compute_sim(clip_model, features, segmentation, prompt, normalize=False):
-    prompt_embed = clip_model.encode_text([prompt], "cuda").detach().cpu().numpy()[0].T
+    prompt_embed = clip_model.encode_text([prompt]).detach().cpu().numpy()[0].T
     
     canonical_queries = ["object", "things", "stuff"]
-    normalization_embeddings = np.concatenate([clip_model.encode_text([q], "cuda").detach().cpu().numpy().T for q in canonical_queries], axis=1)
+    normalization_embeddings = np.concatenate([clip_model.encode_text([q]).detach().cpu().numpy().T for q in canonical_queries], axis=1)
     # print(f'"{prompt}": {json.dumps(list([list(p) for p in prompt_embed.astype(float)]))}')
 
     sim = features @ prompt_embed
@@ -263,12 +263,16 @@ def evaluate(path, prompt):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # instantiate autoencoder and openclip
-    clip_model = OpenCLIPNetwork(device)
 
     feature_type = path.split("/")[-2]
 
     features = np.load(path + "_f.npy")
     segmentation = np.load(path + "_s.npy")
+
+    if features.shape[-1] == 512:
+        clip_model = OpenCLIPNetwork(device)
+    else:
+        clip_model = SigLipNetwork(device)
     
     sim_img = compute_sim(clip_model, features, segmentation, prompt)
     sim_img = grayscale_to_plasma(sim_img)
@@ -282,12 +286,16 @@ def evaluate(path, prompt):
 def evaluate_comparatively(img_dir, prompt, normalize=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # instantiate autoencoder and openclip
-    clip_model = OpenCLIPNetwork(device)
     import glob
     feature_type = img_dir.split("/")[-1]
-    images = sorted(glob.glob(img_dir.replace(feature_type, "images") + "/*.png"))
+    images = sorted(glob.glob(img_dir.replace(feature_type, "images") + "/*.*"))
     features = [np.load(f) for f in sorted(glob.glob(img_dir + "/*_f.npy"))]
     segmentation = [np.load(f) for f in sorted(glob.glob(img_dir + "/*_s.npy"))]
+    if features[0].shape[-1] == 512:
+        clip_model = OpenCLIPNetwork(device)
+    else:
+        clip_model = SigLipNetwork(device)
+    
     sim_img = [compute_sim(clip_model, features[i], segmentation[i], prompt, normalize=normalize) for i in range(len(features))]
     sim_img = grayscale_to_plasma(sim_img)
 
@@ -308,19 +316,28 @@ def evaluate_comparatively(img_dir, prompt, normalize=False):
     os.makedirs(f"../eval_result/evaluate_text_query/{feature_type}/", exist_ok=True)
     plt.savefig(f"../eval_result/evaluate_text_query/{feature_type}/query_comparison_{prompt}.png")
     #new_p = Image.fromarray((sim_img *255).astype(np.uint8))
-    pass
-
+    
+    # save raw images and sim too under /raw_images /raw_sim
+    os.makedirs(f"../eval_result/evaluate_text_query/{feature_type}/raw_images/", exist_ok=True)
+    os.makedirs(f"../eval_result/evaluate_text_query/{feature_type}/raw_sim_to_{prompt}/", exist_ok=True)
+    for i in range(len(images)):
+        img = Image.open(images[i])
+        img.save(f"../eval_result/evaluate_text_query/{feature_type}/raw_images/{images[i].split('/')[-1]}")
+        new_p = Image.fromarray((sim_img[i] *255).astype(np.uint8))
+        if new_p.mode != 'RGB':
+            new_p = new_p.convert('RGB')
+        new_p.save(f"../eval_result/evaluate_text_query/{feature_type}/raw_sim_to_{prompt}/{images[i].split('/')[-1]}")
 
 if __name__ == "__main__":
     # path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-colmap/language_features/246"
-    feature_type = "language_features_highlight"
-    path = f"/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/{feature_type}/bad_neigh"
+    feature_type = "language_features"
+    # path = f"/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/{feature_type}/bad_neigh"
     
-    prompt = "building"
-    evaluate(path, prompt)
+    # prompt = "building"
+    # evaluate(path, prompt)
     # prompt = "skyscraper"
-    path = f"/home/bieriv/LangSplat/LangSplat/data/buenos-aires-samples/{feature_type}"
-    prompts = ["building", "trees or vegetation", "canal, lake or the sea", "skyscraper", "bridge", "densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]
+    path = f"/home/bieriv/LangSplat/LangSplat/data/rotterdam-samples/{feature_type}"
+    prompts = ["building", "trees or vegetation", "canal, lake or the sea", "skyscraper", "bridge", "road" ] #, "densely populated area", "expensive neighborhood", "touristic neighborhood", "dangerous neighborhood", "industrial area", "old town"]
     for prompt in prompts:
         evaluate_comparatively(path, prompt)
     # if "highlight" in feature_type:

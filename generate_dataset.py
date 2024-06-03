@@ -14,8 +14,10 @@ if platform.system() == "Linux":
 # Create a scene
 # file = "data/brooklyn-bridge.ply"
 #file = "C:/MSC-Data/OpenCityData/brooklyn-bridge-obj/brooklyn-bridge.obj"
-# file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
-file = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
+#file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
+# file = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
+# file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
+file = "/home/bieriv/LangSplat/LangSplat/data/eth/eth2.obj"
 #ile = "C:/MSC-Data/OpenCityData/brooklyn-bridge-ply/brooklyn-bridge.ply"
 if False:
     import open3d as o3d
@@ -25,7 +27,10 @@ if False:
 # output_path = "data/brooklyn-bridge"
 # output_path = "data/buenos-aires-2-smaller-mesh-out
 # put"
-output_path = "data/rotterdam-output"
+# output_path = "data/buenos-aires-2-smaller-mesh-output-low-cam"
+# output_path = "data/buenos-aires-squared-output-v3"
+output_path = "data/eth-output-v1"
+continue_from_last = True
 width = 384
 height = 384
 
@@ -59,14 +64,15 @@ renderer = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=heig
 
 
 bounds  = scene.bounds
-border = 300
+border = 10 #300
+max_position_noise = 100
 xrange = [45, 65] # vertical angle (90 means bird view / satellite and 0 means horizontal / street view)
 yrange = [0, 360] # horizontal angle, we want to go round round round
-height_range = [100, 150]
-n_retries = 7
-max_n_samples = 2000
+height_range = [250, 350] # [50 150][50, 100]
+n_retries = 7 # 7
+max_n_samples = 1000
+orth_prob = 0.3
 
-counter = 0
 
 if not os.path.isdir(output_path):
     os.mkdir(output_path)
@@ -75,7 +81,12 @@ if not os.path.isdir(output_path):
     os.mkdir(f"{output_path}/pose")
     os.mkdir(f"{output_path}/intrinsic")
 
-
+if continue_from_last: 
+    existing = [int(f.split(".")[0]) for f in os.listdir(f"{output_path}/depth")]
+    counter = max(existing) if len(existing) > 0 else 0
+    print(f"Continuing from image {counter}")
+else:
+    counter = 0
 reuse_pose = False
 if not reuse_pose:
     for x_pos in tqdm(np.linspace(bounds[0,0]+border, bounds[1,0]-border, int(np.sqrt(max_n_samples)))):
@@ -86,34 +97,38 @@ if not reuse_pose:
             for i in range(n_retries):
                 random_height = np.random.randint(height_range[0], height_range[1])
                 y_angle = np.random.randint(yrange[0], yrange[1])
-                x_angle = 90 if np.random.rand() < 0.1 else np.random.randint(xrange[0], xrange[1])
+                x_angle = 90 if np.random.rand() < orth_prob else np.random.randint(xrange[0], xrange[1])
                 z_angle = 0
-                x_pos += np.random.randint(-border//2, border//2)
-                z_pos += np.random.randint(-border//2, border//2)
+                x_pos += np.random.randint(-max_position_noise//2, max_position_noise//2)
+                z_pos += np.random.randint(-max_position_noise//2, max_position_noise//2)
                 camera = pyrender.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy, zfar=z_far, znear=z_near)
 
-                rotation_matrix = R.from_euler(seq="yxz", angles=[y_angle,x_angle,z_angle], degrees=True).as_matrix()
-                extrinsic_matrix = np.block([[rotation_matrix, np.array([0, 0, 0]).reshape(-1, 1)],
-                                            [0, 0, 0, 1]])
-                extrinsic_matrix = np.linalg.inv(extrinsic_matrix)
-                # set camera pos instead of world pos for simplicity
-                extrinsic_matrix[:3, 3] = [x_pos, random_height, z_pos]
-                
+                min_distance = -1 
+                while min_distance < 50: 
+                    if min_distance > 0:
+                        print(f"min_distance: {min_distance}")
+                    # move the camera up until there is nothing too close to it
+                    rotation_matrix = R.from_euler(seq="yxz", angles=[y_angle,x_angle,z_angle], degrees=True).as_matrix()
+                    extrinsic_matrix = np.block([[rotation_matrix, np.array([0, 0, 0]).reshape(-1, 1)],
+                                                [0, 0, 0, 1]])
+                    extrinsic_matrix = np.linalg.inv(extrinsic_matrix)
+                    # set camera pos instead of world pos for simplicity
+                    extrinsic_matrix[:3, 3] = [x_pos, random_height, z_pos]
+                    
+                    assert np.isclose(np.linalg.det(extrinsic_matrix), 1), f"Determinant of extrinsic matrix is not 1 but {np.linalg.det(extrinsic_matrix)}"
 
-                assert np.isclose(np.linalg.det(extrinsic_matrix), 1), f"Determinant of extrinsic matrix is not 1 but {np.linalg.det(extrinsic_matrix)}"
+                    # Render the scene
+                    added_node = scene.add(camera, pose=extrinsic_matrix)
+                    scene.main_camera_node = added_node
 
-                # Render the scene
-                added_node = scene.add(camera, pose=extrinsic_matrix)
-                scene.main_camera_node = added_node
-                # print(camera.get_projection_matrix(width, height))
-                # print(camera.K)
-                # print(camera.transform)
-                # print(extrinsic_matrix)
-                # raise ValueError()
-                color, depth = renderer.render(scene)  
+                    color, depth = renderer.render(scene) 
+                    if (depth > z_near).sum() == 0:
+                        break
+                    min_distance = np.min(depth[depth > z_near]) 
+                    random_height += 25
                 
                 if np.sum(depth < z_near) < 0.20 * depth.size:
-                    np.save(f"{output_path}/depth/{counter}.npy", depth)
+                    np.save(f"{output_path}/depth/{counter}.npy", depth.astype(np.float16))
                     imageio.imwrite(f"{output_path}/color/{counter}.jpg", color)
                     np.savetxt(f"{output_path}/pose/{counter}.txt", extrinsic_matrix, fmt='%f')
                     counter += 1

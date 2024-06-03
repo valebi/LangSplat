@@ -156,6 +156,7 @@ def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite
         print(f"Embedding {data_list[i]} ----------------------------")
         save_path = os.path.join(save_folder, data_list[i].split('.')[0])
         if not overwrite and os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy'):
+            print(f"Skipping {data_list[i]}")
             continue
         timer += 1
         try:
@@ -274,7 +275,7 @@ def get_seg_img(mask, image, mode="bbox", pad=25):
         contours, hierarchy = cv2.findContours((255-seg_mask*255).astype(np.uint8), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         seg_img = cv2.drawContours(seg_img, contours, -1, (255,0,0), 3)
         
-        # if (mask['segmentation']!=0).sum() / (mask['segmentation']==0).sum() > 0.05:
+        # if (mask['segmentation']!=0).sum() / (mask['segmentation']==0).sum() > 0.1:
         #     pil_img = Image.fromarray(seg_img)
         #     pil_img = pil_img.convert("RGB")
         #     ratio = (mask['segmentation']!=0).sum() / (mask['segmentation']==0).sum()
@@ -507,7 +508,7 @@ if __name__ == '__main__':
     if overwrite:
         print("[ INFO ] Overwriting existing features")
     else:
-        print("[ INFO ] Recomputing all features")
+        print("[ INFO ]  Reusing features")
     print(f"[ INFO ] Embedding mode: {mode}")
     img_folder = os.path.join(dataset_path, 'images')
     if not os.path.isdir(img_folder):

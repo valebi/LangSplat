@@ -2,6 +2,33 @@
 import torch
 import torchvision
 import open_clip
+from PIL import Image
+from open_clip import create_model_from_pretrained, get_tokenizer, create_model_and_transforms # works on open-clip-torch>=2.23.0, timm>=0.9.8
+
+class SigLipNetwork:
+    def __init__(self, device):
+        self.checkpoint = 'hf-hub:timm/ViT-SO400M-14-SigLIP-384'
+        self.model, self.preprocess = create_model_from_pretrained(self.checkpoint)
+        self.tokenizer = get_tokenizer('hf-hub:timm/ViT-B-16-SigLIP')
+        self.model = self.model.to(device)
+        self.model.half().eval()
+        self.device = device
+        self.clip_n_dims = 1152
+
+    def encode_text(self, texts):
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            return self.model.encode_text(self.tokenizer(texts, context_length=self.model.context_length).to(self.device))
+    
+    def encode_image(self, images, batch_size=128):
+        pil_images =  [Image.fromarray((i*255).detach().cpu().numpy().transpose(1,2, 0).astype(np.uint8)) for i in images] # ugly af
+        torch_images = torch.stack(list(map(self.preprocess, pil_images)), axis=0).half().to(self.device)
+
+        embeddings = []
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            for i in range(0, len(images), batch_size):
+                embeddings.append(self.model.encode_image(torch_images[i:i+batch_size]))
+        return torch.cat(embeddings, axis=0)
+
 
 
 class OpenCLIPNetwork:

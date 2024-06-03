@@ -16,7 +16,7 @@ from PIL import Image
 import torch
 import torchvision
 from torch import nn
-from preprocess import seed_everything, OpenCLIPNetwork, OpenCLIPNetworkConfig
+from preprocess import seed_everything, SigLipNetwork, OpenCLIPNetwork, OpenCLIPNetworkConfig
 
 import pickle
 
@@ -50,22 +50,28 @@ if __name__ == '__main__':
     data_list = [f for f in sorted(os.listdir(img_folder))]
     data_list.sort()
 
-    model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
-    model.eval()
+    if model == "siglip":
+        model = SigLipNetwork(device="cuda")
+    elif model == "clip":
+        model = OpenCLIPNetwork(OpenCLIPNetworkConfig)
+        model.eval()
+    else:
+        assert False, "Unknown model"
 
     img_list = []
     for data_path in tqdm(data_list, desc="Loading images"):
         image_path = os.path.join(img_folder, data_path)
         image = cv2.imread(image_path)
-        image = cv2.resize(image, (224, 224))
+        if model == "clip":
+            image = cv2.resize(image, (224, 224))
         img_list.append(image)
        
     imgs = np.stack(img_list, axis=0)
-    imgs = torch.from_numpy(imgs.astype("float32")).permute(0,3,1,2) / 255.0
+    imgs = torch.from_numpy(imgs.astype("float16")).permute(0,3,1,2) / 255.0
 
 
     embeddings = []
-    bsize=264
+    bsize=64
     for batch_i in tqdm(range(0, len(img_list), bsize), desc="Generating embeddigs"):
         batch = imgs[batch_i:batch_i+bsize].cuda()
         with torch.no_grad():
@@ -75,7 +81,10 @@ if __name__ == '__main__':
     embeddings /= np.linalg.norm(embeddings, axis=-1, keepdims=True)
 
     
-    save_folder = os.path.join(dataset_path, 'full_image_embeddings')
+    if model == "siglip":
+        save_folder = os.path.join(dataset_path, 'full_image_embeddings_siglip')
+    else:
+        save_folder = os.path.join(dataset_path, 'full_image_embeddings')
     os.makedirs(save_folder, exist_ok=True)
     np.save(os.path.join(save_folder, "embeddings.npy"), embeddings)
     # for i, e in tqdm(enumerate(embeddings), desc="Saving embeddings"):

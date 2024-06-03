@@ -13,6 +13,7 @@ import torch
 import sys
 
 sys.path.append("..")
+np.random.seed(42)
 
 def map_to_pixels(point3d,w,h,projection,view, z_near=10, z_far=2000):
     # https://stackoverflow.com/questions/67517809/mapping-3d-vertex-to-pixel-using-pyreder-pyglet-opengl
@@ -42,7 +43,7 @@ def get_visible_points_view(points, poses, depth_images, intrinsics, vis_thresho
     #                          [  0.,   0.,  -1.,   0.]], dtype=np.float32)
 
     img2points = {}
-    points2img = {}
+    # points2img = {}
     # projected_points = np.zeros((n_points, 2), dtype = int)
     print(f"[INFO] Computing the visible points in each view.")
     
@@ -136,7 +137,7 @@ def get_visible_points_view(points, poses, depth_images, intrinsics, vis_thresho
     # print(f"[INFO] Maximum number of views per point: {np.max([points2img[i]['indices'].shape[0] for i in points2img])}")
     # print(f"[INFO] Minimum number of views per point: {np.min([points2img[i]['indices'].shape[0] for i in points2img])}")
     # print(f"[INFO] Median number of views per point: {np.median([points2img[i]['indices'].shape[0] for i in points2img])}")
-    return points2img, img2points
+    return img2points
 
 
 def project_features_to_pixel(mask_features, image_masks, image_features = None, n_occurrences = None):
@@ -208,8 +209,8 @@ def extract_averaged_point_features(pixel_wise_features, points2img):
     return averaged_features
 
 
-def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(3*1e6)):
-    np.random.seed(42)
+def load_data(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(1*1e6)):
+    
     print("[INFO] Loading the data..")
     # mesh = o3d.io.read_point_cloud(ply_path)
     mesh = o3d.io.read_triangle_model(obj_path)
@@ -226,26 +227,28 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         points3D = points3D[np.random.choice(len(points3D), max_points, replace=False)]
 
 
-    images = [cv2.imread(path) for path in tqdm(sorted(glob.glob(os.path.join(images_path, "*.jpg"))), desc="Loading images")]
-    depth_images = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(depth_path, "*.npy"))), desc="Loading depth images")]
-    features = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*.npy"))), desc="Loading features")]
-    masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*.npy"))), desc="Loading masks")]
-    poses = [np.loadtxt(path) for path in tqdm(sorted(glob.glob(os.path.join(poses_path, "*.txt"))), desc="Loading poses")]
-    intrinsics = np.loadtxt(intrinsics_path)
 
-    if mask_path == feat_path:
-        print("[INFO] Mask and feature paths are the same. Selecting based on _s, _f endings")
-        masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*_s.npy"))), desc="Reloading masks")]
-        features = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*_f.npy"))), desc="Reloading features")]
+    # if mask_path == feat_path:
+    #     print("[INFO] Mask and feature paths are the same. Selecting based on _s, _f endings")
+    #     masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*_s.npy"))), desc="Reloading masks")]
+    #     features = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*_f.npy"))), desc="Reloading features")]
 
-    if full_embeddings_mode and full_embedding_path is not None:
+    if full_embeddings_mode:
+        if full_embedding_path is None:
+            raise ValueError("Full embeddings mode is enabled but no full embedding path is provided")
         full_embeddings = np.load(os.path.join(full_embedding_path, "embeddings.npy"))
+        images = [cv2.imread(path) for path in tqdm(sorted(glob.glob(os.path.join(images_path, "*.jpg"))), desc="Loading images")]
         masks = [np.zeros((1,) + i.shape[:2], dtype=int) for i in images]
-        features = [np.expand_dims(full_embeddings[i], 0) for i in range(len(images))] 
-    elif True or not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
-        print("Warning: Number of images, depth images, features, masks and poses do not match")
-        if full_embeddings_mode:
-            raise ValueError("Full embeddings mode is not supported when the number of images, depth images, features, masks and poses do not match")
+        features = [np.expand_dims(full_embeddings[i], 0).astype(np.float16) for i in range(len(images))] 
+        depth_images = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(depth_path, "*.npy"))), desc="Loading depth images")]
+        # features = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*.npy"))), desc="Loading features")]
+        # masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*.npy"))), desc="Loading masks")]
+        poses = [np.loadtxt(path) for path in tqdm(sorted(glob.glob(os.path.join(poses_path, "*.txt"))), desc="Loading poses")]
+        assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
+    else: # True or not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
+        # print("Warning: Number of images, depth images, features, masks and poses do not match")
+        # if full_embeddings_mode:
+        #     raise ValueError("Full embeddings mode is not supported when the number of images, depth images, features, masks and poses do not match")
         # only keep the ones that have all the data: match based on names
         image_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(images_path, "*.jpg")))]
         depth_image_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(depth_path, "*.npy")))]
@@ -253,21 +256,16 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         mask_names = [os.path.basename(path).split(("." if feat_path != mask_path else "_s."))[0] for path in sorted(glob.glob(os.path.join(mask_path, "*.npy")))]
         pose_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(poses_path, "*.txt")))]
         common_names = set(image_names) & set(depth_image_names) & set(feature_names) & set(mask_names) & set(pose_names)
-        print("Reloading images, depth images, features, masks and poses based on common names")
+        print("Loading images, depth images, features, masks and poses based on common names")
         images = [cv2.imread(os.path.join(images_path, name + ".jpg")) for name in common_names]
-        depth_images = [np.load(os.path.join(depth_path, name + ".npy")) for name in common_names]
-        features = [np.load(os.path.join(feat_path, name + (".npy" if feat_path != mask_path else "_f.npy"))) for name in common_names]
+        depth_images = [np.load(os.path.join(depth_path, name + ".npy")).astype(np.float16) for name in common_names]
+        features = [np.load(os.path.join(feat_path, name + (".npy" if feat_path != mask_path else "_f.npy"))).astype(np.float16) for name in common_names]
         masks = [np.load(os.path.join(mask_path, name + (".npy" if feat_path != mask_path else "_s.npy"))) for name in common_names]
         poses = [np.loadtxt(os.path.join(poses_path, name + ".txt")) for name in common_names]
         assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
+    intrinsics = np.loadtxt(intrinsics_path)
 
-    
     height, width, channels = images[0].shape
-    n_levels, _, _ = masks[0].shape
-
-    # for image, depth_image, feature, mask, pose in zip(images, depth_images, features, masks, poses):
-    #     # make sure name matches
-    #     assert os.path.basename(image).split(".")[0] == os.path.basename(depth_image).split(".")[0] == os.path.basename(feature).split(".")[0] == os.path.basename(mask).split(".")[0] == os.path.basename(pose).split(".")[0]
 
     print(f"[INFO] Number of views: {len(images)}")
     print(f"[INFO] Image dimension: {height}x{width}x{channels}")
@@ -275,16 +273,95 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
     print(f"[INFO] Number of points: {len(points3D)}")
     print(f"[INFO] Mask dimension: {masks[0].shape}")
     print(f"[INFO] Pose dimension: {poses[0].shape}")
+    
+    n_levels, _, _ = masks[0].shape
+    return images, masks, points3D, poses, depth_images, features, intrinsics, n_levels
 
-    points2img, img2points = get_visible_points_view(points3D, poses, depth_images, intrinsics)
+
+def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(1*1e6)):
+    # mesh = o3d.io.read_point_cloud(ply_path)
+    # mesh = o3d.io.read_triangle_model(obj_path)
+    # try:
+    #     points3D = mesh.points
+    # except:
+    #     try:
+    #         points3D = np.concatenate([mesh.meshes[i].mesh.vertices for i in range(len(mesh.meshes))])
+    #     except ValueError:
+    #         mesh =  o3d.io.read_triangle_mesh(obj_path)
+    #         points3D = mesh.vertices
+    # if len(points3D) > max_points:
+    #     # randomly subsample points
+    #     points3D = points3D[np.random.choice(len(points3D), max_points, replace=False)]
+
+
+
+    # # if mask_path == feat_path:
+    # #     print("[INFO] Mask and feature paths are the same. Selecting based on _s, _f endings")
+    # #     masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*_s.npy"))), desc="Reloading masks")]
+    # #     features = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*_f.npy"))), desc="Reloading features")]
+
+    # if full_embeddings_mode:
+    #     if full_embedding_path is None:
+    #         raise ValueError("Full embeddings mode is enabled but no full embedding path is provided")
+    #     full_embeddings = np.load(os.path.join(full_embedding_path, "embeddings.npy"))
+    #     images = [cv2.imread(path) for path in tqdm(sorted(glob.glob(os.path.join(images_path, "*.jpg"))), desc="Loading images")]
+    #     masks = [np.zeros((1,) + i.shape[:2], dtype=int) for i in images]
+    #     features = [np.expand_dims(full_embeddings[i], 0).astype(np.float16) for i in range(len(images))] 
+    #     depth_images = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(depth_path, "*.npy"))), desc="Loading depth images")]
+    #     # features = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*.npy"))), desc="Loading features")]
+    #     # masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*.npy"))), desc="Loading masks")]
+    #     poses = [np.loadtxt(path) for path in tqdm(sorted(glob.glob(os.path.join(poses_path, "*.txt"))), desc="Loading poses")]
+    #     assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
+    # else: # True or not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
+    #     # print("Warning: Number of images, depth images, features, masks and poses do not match")
+    #     # if full_embeddings_mode:
+    #     #     raise ValueError("Full embeddings mode is not supported when the number of images, depth images, features, masks and poses do not match")
+    #     # only keep the ones that have all the data: match based on names
+    #     image_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(images_path, "*.jpg")))]
+    #     depth_image_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(depth_path, "*.npy")))]
+    #     feature_names = [os.path.basename(path).split(("." if feat_path != mask_path else "_f."))[0] for path in sorted(glob.glob(os.path.join(feat_path, "*.npy")))]
+    #     mask_names = [os.path.basename(path).split(("." if feat_path != mask_path else "_s."))[0] for path in sorted(glob.glob(os.path.join(mask_path, "*.npy")))]
+    #     pose_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(poses_path, "*.txt")))]
+    #     common_names = set(image_names) & set(depth_image_names) & set(feature_names) & set(mask_names) & set(pose_names)
+    #     print("Loading images, depth images, features, masks and poses based on common names")
+    #     images = [cv2.imread(os.path.join(images_path, name + ".jpg")) for name in common_names]
+    #     depth_images = [np.load(os.path.join(depth_path, name + ".npy")).astype(np.float16) for name in common_names]
+    #     features = [np.load(os.path.join(feat_path, name + (".npy" if feat_path != mask_path else "_f.npy"))).astype(np.float16) for name in common_names]
+    #     masks = [np.load(os.path.join(mask_path, name + (".npy" if feat_path != mask_path else "_s.npy"))) for name in common_names]
+    #     poses = [np.loadtxt(os.path.join(poses_path, name + ".txt")) for name in common_names]
+    #     assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
+    # intrinsics = np.loadtxt(intrinsics_path)
+
+    images, masks, points3D, poses, depth_images, features, intrinsics, n_levels = load_data(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, full_embedding_path, full_embeddings_mode, max_points=max_points)
+
+    # for image, depth_image, feature, mask, pose in zip(images, depth_images, features, masks, poses):
+    #     # make sure name matches
+    #     assert os.path.basename(image).split(".")[0] == os.path.basename(depth_image).split(".")[0] == os.path.basename(feature).split(".")[0] == os.path.basename(mask).split(".")[0] == os.path.basename(pose).split(".")[0]
+
+
+    # height, width, channels = images[0].shape
+    # n_levels, _, _ = masks[0].shape
+
+    # # for image, depth_image, feature, mask, pose in zip(images, depth_images, features, masks, poses):
+    # #     # make sure name matches
+    # #     assert os.path.basename(image).split(".")[0] == os.path.basename(depth_image).split(".")[0] == os.path.basename(feature).split(".")[0] == os.path.basename(mask).split(".")[0] == os.path.basename(pose).split(".")[0]
+
+    # print(f"[INFO] Number of views: {len(images)}")
+    # print(f"[INFO] Image dimension: {height}x{width}x{channels}")
+    # print(f"[INFO] Feature dimension: {features[0].shape}")
+    # print(f"[INFO] Number of points: {len(points3D)}")
+    # print(f"[INFO] Mask dimension: {masks[0].shape}")
+    # print(f"[INFO] Pose dimension: {poses[0].shape}")
+
+    img2points = get_visible_points_view(points3D, poses, depth_images, intrinsics)
 
     
     # @TODO torchify and batchify
     if True:
-        point_features_sum = np.empty((n_levels, len(points3D), features[0].shape[1]), dtype=np.float16)
-        n_observed = np.zeros((n_levels, len(points3D)))
-        image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
-        n_occurrences_placeholder = np.zeros((n_levels, height, width))
+        point_features_sum = np.zeros((n_levels, len(points3D), features[0].shape[1]), dtype=np.float32)
+        n_observed = np.zeros((n_levels, len(points3D)), dtype=int)
+        # image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
+        # n_occurrences_placeholder = np.zeros((n_levels, height, width))
         # average features
         for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
             # @TODO double gather, don't go via pixel
@@ -300,7 +377,12 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
                 point_features_sum[:, index] += feat
                 n_observed[:, index] += (mask_ix != -1)
         point_features_sum /= np.maximum(1, n_observed[:, :, None])
-
+        point_features_sum = point_features_sum.astype(np.float16)
+        
+        print(f"[INFO] Average number of features per point: {np.mean(n_observed)}")
+        print(f"[INFO] Maximum number of features per point: {np.max(n_observed)}")
+        print(f"[INFO] Minimum number of features per point: {np.min(n_observed)}")
+        print(f"[INFO] Median number of features per point: {np.median(n_observed)}")
         print("[INFO] Point feature shape:", point_features_sum.shape)
         if "highlight" in feat_path:
             np.save("point_features_highlight.npy", point_features_sum)
@@ -309,7 +391,7 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
 
     if True:
         # average colors
-        point_colors_sum = np.zeros((len(points3D), 3), dtype=np.float32)
+        point_colors_sum = np.zeros((len(points3D), 3), dtype=np.float16)
         n_observed = np.zeros(len(points3D))
         for i in tqdm(range(len(images)), desc="Projecting colors to 3D points"):
             for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
@@ -318,6 +400,7 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         point_colors_sum /= np.maximum(1, n_observed[:, None])
         
         print(np.nanmax(point_colors_sum), np.nanmin(point_colors_sum))
+
         # create point cloud and save it
         point_cloud = o3d.geometry.PointCloud()
         point_cloud.points = o3d.utility.Vector3dVector(points3D)
@@ -337,14 +420,14 @@ if __name__ == "__main__":
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
         full_embeddings_mode = False
     else:
-        obj_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
-        base_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh-output/"
+        obj_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
+        base_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared-output-v3/"
         full_embeddings_mode = True
     convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
                     images_path= base_path + "color",
                     depth_path = base_path + "depth",
-                    feat_path = base_path + "language_features_highlight",
-                    mask_path = base_path + "language_features_highlight",
+                    feat_path = base_path + "language_features",
+                    mask_path = base_path + "language_features",
                     full_embedding_path = base_path + "full_image_embeddings",
                     poses_path = base_path + "pose",
                     intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
