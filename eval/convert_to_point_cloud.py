@@ -256,7 +256,7 @@ def load_data(obj_path, images_path, depth_path, feat_path, mask_path, poses_pat
         mask_names = [os.path.basename(path).split(("." if feat_path != mask_path else "_s."))[0] for path in sorted(glob.glob(os.path.join(mask_path, "*.npy")))]
         pose_names = [os.path.basename(path).split(".")[0] for path in sorted(glob.glob(os.path.join(poses_path, "*.txt")))]
         common_names = set(image_names) & set(depth_image_names) & set(feature_names) & set(mask_names) & set(pose_names)
-        print("Loading images, depth images, features, masks and poses based on common names")
+        print("[INFO] Loading images, depth images, features, masks and poses based on common names")
         images = [cv2.imread(os.path.join(images_path, name + ".jpg")) for name in common_names]
         depth_images = [np.load(os.path.join(depth_path, name + ".npy")).astype(np.float16) for name in common_names]
         features = [np.load(os.path.join(feat_path, name + (".npy" if feat_path != mask_path else "_f.npy"))).astype(np.float16) for name in common_names]
@@ -415,9 +415,13 @@ if __name__ == "__main__":
         base_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge/"
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-obj/brooklyn-bridge.obj"
         full_embeddings_mode = False
-    elif True:
+    elif False:
         base_path = "/home/bieriv/LangSplat/LangSplat/data/rotterdam-output/"
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
+        full_embeddings_mode = False
+    elif True:
+        base_path = "/home/bieriv/LangSplat/LangSplat/data/eth-output-v1/"
+        obj_path = "/home/bieriv/LangSplat/LangSplat/data/eth/eth.glb"
         full_embeddings_mode = False
     else:
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
@@ -426,8 +430,8 @@ if __name__ == "__main__":
     convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
                     images_path= base_path + "color",
                     depth_path = base_path + "depth",
-                    feat_path = base_path + "language_features",
-                    mask_path = base_path + "language_features",
+                    feat_path = base_path + "language_features_highlight",
+                    mask_path = base_path + "language_features_highlight",
                     full_embedding_path = base_path + "full_image_embeddings",
                     poses_path = base_path + "pose",
                     intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
