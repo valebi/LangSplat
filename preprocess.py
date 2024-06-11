@@ -479,8 +479,6 @@ def seed_everything(seed_value):
 
 
 if __name__ == '__main__':
-    seed_num = 42
-    seed_everything(seed_num)
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_path', type=str, required=True)
@@ -560,6 +558,13 @@ if __name__ == '__main__':
     images = [img_list[i].permute(2, 0, 1)[None, ...] for i in range(len(img_list))]
     #imgs = torch.cat(images)
 
+    random_perm = np.random.permutation(len(images))
+    images = [images[i] for i in random_perm]
+    data_list = [data_list[i] for i in random_perm]
+
+
+    seed_num = 42
+    seed_everything(seed_num)
     if mode == 'bbox':
         save_folder = os.path.join(dataset_path, 'language_features')
     else:
