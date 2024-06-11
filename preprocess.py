@@ -299,11 +299,12 @@ def pad_img(img):
         pad[(w-h)//2:(w-h)//2 + h, :, :] = img
     return pad
 
-def filter(keep: torch.Tensor, masks_result) -> None:
+def filter(keep: torch.Tensor, masks_result, min_size = 0.0025) -> None:
     keep = keep.int().cpu().numpy()
     result_keep = []
     for i, m in enumerate(masks_result):
-        if i in keep: result_keep.append(m)
+        seg = m["segmentation"]
+        if i in keep and seg.sum() > seg.shape[0] * seg.shape[1] * min_size: result_keep.append(m)
     return result_keep
 
 def bboxes_intersect(bbox1, bbox2):

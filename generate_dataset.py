@@ -18,6 +18,8 @@ if platform.system() == "Linux":
 # file = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
 # file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
 file = "/home/bieriv/LangSplat/LangSplat/data/eth/eth.glb"
+# file = "/home/bieriv/LangSplat/LangSplat/data/delft/delft.glb"
+# file = "/home/bieriv/LangSplat/LangSplat/data/ams/ams.glb"
 #ile = "C:/MSC-Data/OpenCityData/brooklyn-bridge-ply/brooklyn-bridge.ply"
 if False:
     import open3d as o3d
@@ -68,9 +70,9 @@ border = 10 #300
 max_position_noise = 100
 xrange = [45, 65] # vertical angle (90 means bird view / satellite and 0 means horizontal / street view)
 yrange = [0, 360] # horizontal angle, we want to go round round round
-height_range = [450, 650] # [50 150][50, 100]
+height_range = [50 150] #[500, 550] # [50, 100]
 n_retries = 7 # 7
-max_n_samples = 1000
+max_n_samples = 6000
 orth_prob = 0.3
 
 
