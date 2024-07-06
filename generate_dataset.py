@@ -17,10 +17,12 @@ if platform.system() == "Linux":
 #file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-2-smaller-mesh/buenos-aires-2.obj"
 # file = "/home/bieriv/LangSplat/LangSplat/data/rotterdam/rotterdam.obj"
 # file = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
-file = "/home/bieriv/LangSplat/LangSplat/data/eth/eth.glb"
+# file = "/home/bieriv/LangSplat/LangSplat/data/ams/ams.glb"
 # file = "/home/bieriv/LangSplat/LangSplat/data/delft/delft.glb"
 # file = "/home/bieriv/LangSplat/LangSplat/data/ams/ams.glb"
 #ile = "C:/MSC-Data/OpenCityData/brooklyn-bridge-ply/brooklyn-bridge.ply"
+# file = "/mnt/usb_ssd/opencity-data/data/utrecht/utrecht.glb"
+file = "/mnt/usb_ssd/opencity-data/data/denhaag/denhaag.glb"
 if False:
     import open3d as o3d
     mesh = o3d.io.read_triangle_model(file, True)
@@ -31,7 +33,9 @@ if False:
 # put"
 # output_path = "data/buenos-aires-2-smaller-mesh-output-low-cam"
 # output_path = "data/buenos-aires-squared-output-v3"
-output_path = "data/eth-output-v1"
+# output_path = "data/ams-output-v2"
+# output_path = "/mnt/usb_ssd/opencity-data/data/utrecht-output-v1"
+output_path = "/mnt/usb_ssd/opencity-data/data/denhaag-output-sig-highlight"
 continue_from_last = True
 width = 384
 height = 384
@@ -70,9 +74,9 @@ border = 10 #300
 max_position_noise = 100
 xrange = [45, 65] # vertical angle (90 means bird view / satellite and 0 means horizontal / street view)
 yrange = [0, 360] # horizontal angle, we want to go round round round
-height_range = [50 150] #[500, 550] # [50, 100]
+height_range = [25, 100] #[500, 550] # [50, 100]
 n_retries = 7 # 7
-max_n_samples = 6000
+max_n_samples = 7500
 orth_prob = 0.3
 
 
@@ -149,4 +153,3 @@ else:
         imageio.imwrite(path.replace("/pose/", "/color/").replace(".txt",".jpg"), color)
 np.savetxt(f"{output_path}/intrinsic/intrinsic_color.txt", intrinsic_matrix, fmt='%f')
 np.savetxt(f"{output_path}/intrinsic/projection_matrix.txt", camera.get_projection_matrix(width, height), fmt='%f')
-

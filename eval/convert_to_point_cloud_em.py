@@ -331,6 +331,9 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
     #     poses = [np.loadtxt(os.path.join(poses_path, name + ".txt")) for name in common_names]
     #     assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
     # intrinsics = np.loadtxt(intrinsics_path)
+    
+    base_path = os.path.dirname(feat_path)
+    print(f"Base Path: {base_path}")
 
     images, masks, points3D, poses, depth_images, features, intrinsics, n_levels = load_data(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, full_embedding_path, full_embeddings_mode, max_points=max_points)
 
@@ -356,42 +359,91 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
     img2points = get_visible_points_view(points3D, poses, depth_images, intrinsics)
 
     
-    # @TODO torchify and batchify
-    if True:
-        point_features_sum = np.zeros((n_levels, len(points3D), features[0].shape[1]), dtype=np.float32)
-        n_observed = np.zeros((n_levels, len(points3D)), dtype=int)
+    if False:
         # image_feature_placeholder = np.zeros((n_levels, height, width, features[0].shape[1]))
         # n_occurrences_placeholder = np.zeros((n_levels, height, width))
         # average features
-        for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
-            # @TODO double gather, don't go via pixel
-            # pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
-            # @TODO numpyify or torchify (.gather()?)
-            for index, position in zip(img2points[i]["indices"], img2points[i]["projected_points"]):
-                mask_ix = masks[i][:, position[1], position[0]]
-                feat = features[i][mask_ix] * (mask_ix != -1)[: , None]
-                # assert (pixel_wise_features[:, position[1], position[0]] == feat).all()
-                # assert ((n_occurrences[:, position[1], position[0]]).astype(bool) == (mask_ix != -1)).all()
-                # point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
-                # n_observed[:, index] += n_occurrences[:, position[1], position[0]]
-                # if feat.shape[-1] != 512:
-                #     continue
-                # else:
-                #     point_features_sum[:, index] += feat
-                #     n_observed[:, index] += (mask_ix != -1)
-        point_features_sum /= np.maximum(1, n_observed[:, :, None])
-        point_features_sum = point_features_sum.astype(np.float16)
         
+        allegiances = [np.expand_dims(np.ones(n_levels) / n_levels, axis=0).repeat(len(features[i]), axis=0) for i in range(len(features))]
+        for iter in range(10):
+            point_features_sum = np.zeros((n_levels, len(points3D), features[0].shape[1]), dtype=np.float32)
+            n_observed = np.zeros((n_levels, len(points3D)), dtype=np.float64)
+            # recompute means
+            for i in tqdm(range(len(features)), desc="Projecting features to 3D points"):
+                # @TODO double gather, don't go via pixel
+                # pixel_wise_features, n_occurrences = project_features_to_pixel(features[i], masks[i], image_feature_placeholder, n_occurrences_placeholder)
+                # @TODO numpyify or torchify (.gather()?)
+                if features[i].shape[-1] != features[0].shape[-1]:
+                    continue
+                positions = img2points[i]["projected_points"]
+                points = img2points[i]["indices"]
+                mask_ix = masks[i][:, positions[:, 1], positions[:, 0]]
+                
+                # point_features_sum[:, points] += allegiances @ (features[i][mask_ix] * (mask_ix != -1)[..., None])
+                
+                if iter == 0:
+                     point_features_sum[:, points] += features[i][mask_ix] * (mask_ix != -1)[..., None]
+                     n_observed[:, points] += (mask_ix != -1)
+                else:
+                    # allegiances[i] has shape (n_masks, n_levels). Here we assign every point the allegiance of the mask it belongs to. 
+                    # resulting allegiances has shape (n_levels, n_points, n_levels)
+                    alleg = allegiances[i][mask_ix] 
+                    # the observed features with shape (n_levels, n_points, n_features)
+                    point_features_view = features[i][mask_ix] * (mask_ix != -1)[..., None]
+                    # we multiply each hierarchy level by a (n_levels, n_levels) permutation matrix, essentially reassigning the levels
+                    point_features_view_reassigned = np.einsum("ino,ink->onk", alleg, point_features_view)
+                    point_features_sum[:, points] += point_features_view_reassigned
+                    # total_assigned_weight = (mask_ix != -1) * alleg.sum(axis=2)
+                    total_assigned_weight = np.einsum("ino,in->on", alleg, (mask_ix != -1))
+                    n_observed[:, points] += total_assigned_weight
+            point_features_sum /= n_observed[:, :, None] + 1e-6
+            # point_features_sum /= point_features_sum.sum(axis=-1, keepdims=True) + 1e-6
+            
+            overall_similarity_before = 0.0
+            overall_similarity_after = 0.0
+            overall_masks = 0
+            # recompute allegiances
+            for i in tqdm(range(len(features)), desc="Recomputing allegiances"):
+                if features[i].shape[-1] != features[0].shape[-1]:
+                    continue
+                positions = img2points[i]["projected_points"]
+                points = img2points[i]["indices"]
+                mask_ix = masks[i][:, positions[:, 1], positions[:, 0]] # TODO: first compute similarity, then assign
+                for mask_id in range(len(features[i])):
+                    observed_feature = features[i][mask_id]
+                    points_within_mask = points[(mask_ix == mask_id).any(axis=0)]
+                    if len(points_within_mask) == 0:
+                        continue
+                    model_features = point_features_sum[:, points_within_mask]
+                    level_similarity = (model_features @ observed_feature).mean(-1)
+                    overall_similarity_before += level_similarity @ allegiances[i][mask_id]
+                    allegiances[i][mask_id] = np.arange(0, n_levels) == np.argmax(level_similarity, axis=0)
+                    overall_similarity_after += level_similarity @ allegiances[i][mask_id]
+                    overall_masks += 1
+            
+            print(f"[INFO] Average similarity before: {overall_similarity_before / overall_masks}")
+            print(f"[INFO] Average similarity after: {overall_similarity_after / overall_masks}")
+        
+        
+        point_features_sum = point_features_sum.astype(np.float16)
         print(f"[INFO] Average number of features per point: {np.mean(n_observed)}")
         print(f"[INFO] Maximum number of features per point: {np.max(n_observed)}")
         print(f"[INFO] Minimum number of features per point: {np.min(n_observed)}")
         print(f"[INFO] Median number of features per point: {np.median(n_observed)}")
         print("[INFO] Point feature shape:", point_features_sum.shape)
-        if "highlight" in feat_path:
-            np.save("/home/bieriv/LangSplat/LangSplat/data/rotterdam-output/point_features_langbase.npy", point_features_sum)
-        else:
-            np.save("/mnt/usb_ssd/opencity-data/results/rotterdam-siglip/point_features.npy", point_features_sum)
 
+        base_path = os.path.dirname(feat_path)
+        
+        if "highlight" in feat_path:
+            np.save(f"{base_path}/point_features_highlight.npy", point_features_sum)
+            print(f"[INFO] Point features saved to {base_path}/point_features_highlight.npy")
+        else:
+            np.save(f"{base_path}/point_features_full.npy", point_features_sum)
+            print(f"[INFO] Point features saved to {base_path}/point_features_full.npy")
+        # if "highlight" in feat_path:
+        #     np.save("/home/bieriv/LangSplat/LangSplat/data/rotterdam-output/point_features_langbase.npy", point_features_sum)
+        # else:
+        #     np.save("/mnt/usb_ssd/opencity-data/openscene-base/point_features_base.npy", point_features_sum)
     if True:
         # average colors
         point_colors_sum = np.zeros((len(points3D), 3), dtype=np.float16)
@@ -410,7 +462,9 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors_sum)
         assert point_cloud.has_points()
         assert point_cloud.has_colors()
-        o3d.io.write_point_cloud("/mnt/usb_ssd/opencity-data/results/rotterdam-siglip/generated_pcd.ply", point_cloud)
+
+        
+        o3d.io.write_point_cloud(f"{base_path}/generated_pcd.ply", point_cloud)
 
 
 if __name__ == "__main__":
@@ -419,7 +473,7 @@ if __name__ == "__main__":
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-obj/brooklyn-bridge.obj"
         full_embeddings_mode = False
     elif True:
-        base_path = "/mnt/usb_ssd/opencity-data/data/rotterdam-output-v2/"
+        base_path = "/mnt/usb_ssd/opencity-data/data/rotterdam-output/"
         obj_path = "/mnt/usb_ssd/opencity-data/data/rotterdam/rotterdam.obj"
         full_embeddings_mode = False
     elif False:
@@ -441,10 +495,12 @@ if __name__ == "__main__":
     convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
                     images_path= base_path + "color",
                     depth_path = base_path + "depth",
-                    feat_path = base_path + "language_features",
-                    mask_path = base_path + "language_features",
-                    full_embedding_path = base_path + "full_image_embeddings",
+                    feat_path = base_path + "language_features_highlight",
+                    mask_path = base_path + "language_features_highlight",
+                    full_embedding_path = "/mnt/usb_ssd/results/opencity-data/openscene-base/" + "full_image_embeddings",
                     poses_path = base_path + "pose",
                     intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
                     output_path = "semantic_point_cloud.ply",
-                    full_embeddings_mode = full_embeddings_mode)
+                    full_embeddings_mode = full_embeddings_mode,
+                    # max_points = 10000
+                    )

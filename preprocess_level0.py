@@ -84,7 +84,7 @@ if __name__ == '__main__':
     if model == "siglip":
         save_folder = os.path.join(dataset_path, 'full_image_embeddings_siglip')
     else:
-        save_folder = os.path.join(dataset_path, 'full_image_embeddings')
+        save_folder = os.path.join('/mnt/usb_ssd/opencity-data/', 'openscene-base/full_image_embeddings')
     os.makedirs(save_folder, exist_ok=True)
     np.save(os.path.join(save_folder, "embeddings.npy"), embeddings)
     # for i, e in tqdm(enumerate(embeddings), desc="Saving embeddings"):
