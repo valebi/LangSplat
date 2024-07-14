@@ -230,7 +230,11 @@ def _embed_clip_sam_tiles(img_id, image, sam_encoder, masks_cache_dir=None, leve
 
     clip_embeds = {}
     for level in tqdm(['default', 's', 'm', 'l'], desc="applying CLIP to crops"):
-        tiles = seg_images[level]
+        try:
+            tiles = seg_images[level]
+        except KeyError:
+            # No segments at this level
+            continue
         tiles = tiles.to("cuda")
         with torch.no_grad():
             clip_embed = model.encode_image(tiles)
