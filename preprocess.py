@@ -488,11 +488,13 @@ if __name__ == '__main__':
     parser.add_argument('--use_cached_masks', type=bool, default=False)
     parser.add_argument('--overwrite', type=bool, default=False)
     parser.add_argument('--model', type=str, default="siglip")
+    parser.add_argument('--output_substring', type=str, default="", help="substring to add to the output path")
     # parser.add_argument('--overwrite_cache', type=bool, default=False)
     args = parser.parse_args()
     torch.set_default_dtype(torch.float32)
 
     dataset_path = args.dataset_path
+    output_substring = args.output_substring
     sam_ckpt_path = args.sam_ckpt_path
     mode = args.mode
     use_cached_masks = args.use_cached_masks
@@ -566,8 +568,8 @@ if __name__ == '__main__':
     seed_num = 42
     seed_everything(seed_num)
     if mode == 'bbox':
-        save_folder = os.path.join(dataset_path, 'language_features')
+        save_folder = os.path.join(dataset_path, f'language_features{output_substring}')
     else:
-        save_folder = os.path.join(dataset_path, f'language_features_{mode}')
+        save_folder = os.path.join(dataset_path, f'language_features_{mode}{output_substring}')
     os.makedirs(save_folder, exist_ok=True)
     create(images, data_list, save_folder, use_cached_masks=use_cached_masks, overwrite=overwrite, mode=mode)
