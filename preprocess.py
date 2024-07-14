@@ -141,7 +141,7 @@ class OpenCLIPNetwork(nn.Module):
 
 
 
-def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite=False, mode="bbox"):
+def create(image_list, data_list, save_folder, masks_cache_dir=None, overwrite=False, mode="bbox"):
     assert image_list is not None, "image_list must be provided to generate features"
     # embed_size=512
     # seg_maps = []
@@ -154,7 +154,8 @@ def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite
     for i, img in tqdm(enumerate(image_list), desc="Embedding images", total=len(image_list)):
         
         print(f"Embedding {data_list[i]} ----------------------------")
-        save_path = os.path.join(save_folder, data_list[i].split('.')[0])
+        img_id = data_list[i].split('.')[0]
+        save_path = os.path.join(save_folder, img_id)
         if not overwrite and os.path.exists(save_path + '_s.npy') and os.path.exists(save_path + '_f.npy'):
             print(f"Skipping {data_list[i]}")
             continue
@@ -164,17 +165,9 @@ def create(image_list, data_list, save_folder, use_cached_masks=False, overwrite
                 _img = img.unsqueeze(0)
             else:
                 _img = img
-            if use_cached_masks:
-                feature_dir = save_folder.split("/")[-1]
-                img_cache_dir = save_path.replace(feature_dir, f"cached_masks_{feature_dir}")
-                # @TODO: actually delete cached masks, add flag 
-                # if overwrite: # remove old cache
-                #     if os.path.exists(img_cache_dir):
-                #         os.system(f"rm -rf {img_cache_dir}")
-            else:
-                img_cache_dir = None
 
-            img_embed, seg_map = _embed_clip_sam_tiles(_img, sam_encoder, level=mode, img_cache_dir=img_cache_dir)      
+            img_embed, seg_map = _embed_clip_sam_tiles(img_id, _img, sam_encoder, masks_cache_dir=masks_cache_dir,
+                                                       level=mode)
 
             lengths = [len(v) for k, v in img_embed.items()]
             total_length = sum(lengths)
@@ -231,9 +224,9 @@ def sava_numpy(save_path, data):
     np.save(save_path_s, data['seg_maps'].numpy())
     np.save(save_path_f, data['feature'].numpy())
 
-def _embed_clip_sam_tiles(image, sam_encoder, img_cache_dir=None, level="bbox"):
+def _embed_clip_sam_tiles(img_id, image, sam_encoder, masks_cache_dir=None, level="bbox"):
     aug_imgs = torch.cat([image])
-    seg_images, seg_map = sam_encoder(aug_imgs, level, img_cache_dir=img_cache_dir)
+    seg_images, seg_map = sam_encoder(img_id, aug_imgs, level, masks_cache_dir=masks_cache_dir)
 
     clip_embeds = {}
     for level in tqdm(['default', 's', 'm', 'l'], desc="applying CLIP to crops"):
@@ -416,19 +409,60 @@ def masks_update(*args, **kwargs):
         masks_new += (masks_lvl,)
     return masks_new
 
-def sam_encoder(image, mode="bbox", img_cache_dir=None):
+
+def reload_cached_masks(file_path):
+    seg_maps = np.load(file_path)
+    masks = {}
+    for i, key in enumerate(("default", "s", "m", "l")):
+        masks[key] = []
+
+        mask_ids = seg_maps[i]
+        min_id = mask_ids[mask_ids > -1].min()
+
+        # Normalize ids to start at 0
+        mask_ids = mask_ids - min_id
+
+        # Unpack masks
+        for mask_id in range(mask_ids.max()):
+            # True - False mask
+            mask = mask_ids == mask_id
+
+            # Skip not present ids
+            if mask.sum() > 0:
+
+                # bbox in XYWH format
+                rows = np.any(mask, axis=1)
+                cols = np.any(mask, axis=0)
+                rmin, rmax = np.where(rows)[0][[0, -1]]
+                cmin, cmax = np.where(cols)[0][[0, -1]]
+                width = rmax - rmin
+                height = cmax - cmin
+
+                # Area
+                area = mask.sum()
+
+                # Keep at least 2x2
+                if width > 2 and height > 2:
+                    masks[key].append({"segmentation": mask})
+                    masks[key][-1]["bbox"] = [rmin, cmin, width, height]
+                    masks[key][-1]["area"] = area
+
+    return masks["default"], masks["s"], masks["m"], masks["l"]
+
+
+
+
+def sam_encoder(image_id, image, mode="bbox", masks_cache_dir=None):
     image = cv2.cvtColor(image[0].permute(1,2,0).numpy().astype(np.uint8), cv2.COLOR_BGR2RGB)
-    if img_cache_dir is not None and os.path.exists(img_cache_dir):
-        masks_default, masks_s, masks_m, masks_l = pickle.load(open(os.path.join(img_cache_dir, "masks.pkl"), "rb"))
+    cached_masks_path = os.path.join(masks_cache_dir, f"{image_id}_s.npy")
+    if masks_cache_dir is not None and os.path.exists(cached_masks_path):
+        masks_default, masks_s, masks_m, masks_l = reload_cached_masks(cached_masks_path)
     else:
         # pre-compute masks
         masks_default, masks_s, masks_m, masks_l = mask_generator.generate(image)
         # pre-compute postprocess
         masks_default, masks_s, masks_m, masks_l = \
             masks_update(masks_default, masks_s, masks_m, masks_l, iou_thr=0.8, score_thr=0.7, inner_thr=0.5)
-        if img_cache_dir is not None and not os.path.exists(img_cache_dir):
-            os.makedirs(img_cache_dir, exist_ok=True)
-            pickle.dump((masks_default, masks_s, masks_m, masks_l), open(os.path.join(img_cache_dir, "masks.pkl"), "wb"))
 
 
     def mask2segmap(masks, image, mode):
@@ -485,7 +519,7 @@ if __name__ == '__main__':
     parser.add_argument('--resolution', type=int, default=-1)
     parser.add_argument('--sam_ckpt_path', type=str, default="ckpts/sam_vit_h_4b8939.pth")
     parser.add_argument('--mode', type=str, default="highlight")
-    parser.add_argument('--use_cached_masks', type=bool, default=False)
+    parser.add_argument('--masks_cache_dir', type=str, default=None)
     parser.add_argument('--overwrite', type=bool, default=False)
     parser.add_argument('--model', type=str, default="siglip")
     parser.add_argument('--output_substring', type=str, default="", help="substring to add to the output path")
@@ -497,10 +531,10 @@ if __name__ == '__main__':
     output_substring = args.output_substring
     sam_ckpt_path = args.sam_ckpt_path
     mode = args.mode
-    use_cached_masks = args.use_cached_masks
+    masks_cache_dir = args.masks_cache_dir
     overwrite = args.overwrite
     # overwrite_cache = args.overwrite_cache
-    if use_cached_masks:
+    if masks_cache_dir:
         print("[ INFO ] Using cached masks, caching new seg results on cache miss")
         if overwrite:
             print("[ INFO ] Overwriting existing mask cache")
@@ -550,10 +584,10 @@ if __name__ == '__main__':
                 global_down = 1
         else:
             global_down = orig_w / args.resolution
-            
+
         scale = float(global_down)
         resolution = (int( orig_w  / scale), int(orig_h / scale))
-        
+
         image = cv2.resize(image, resolution)
         image = torch.from_numpy(image)
         img_list.append(image)
@@ -572,4 +606,4 @@ if __name__ == '__main__':
     else:
         save_folder = os.path.join(dataset_path, f'language_features_{mode}{output_substring}')
     os.makedirs(save_folder, exist_ok=True)
-    create(images, data_list, save_folder, use_cached_masks=use_cached_masks, overwrite=overwrite, mode=mode)
+    create(images, data_list, save_folder, masks_cache_dir=masks_cache_dir, overwrite=overwrite, mode=mode)
