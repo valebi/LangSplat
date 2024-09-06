@@ -152,7 +152,6 @@ def create(image_list, data_list, save_folder, masks_cache_dir=None, overwrite=F
     mask_generator.predictor.model.to('cuda')
 
     for i, img in tqdm(enumerate(image_list), desc="Embedding images", total=len(image_list)):
-        
         print(f"Embedding {data_list[i]} ----------------------------")
         img_id = data_list[i].split('.')[0]
         save_path = os.path.join(save_folder, img_id)
@@ -160,7 +159,8 @@ def create(image_list, data_list, save_folder, masks_cache_dir=None, overwrite=F
             print(f"Skipping {data_list[i]}")
             continue
         timer += 1
-        try:
+        # try:
+        if True:
             if img.dim() == 3:
                 _img = img.unsqueeze(0)
             else:
@@ -203,8 +203,8 @@ def create(image_list, data_list, save_folder, masks_cache_dir=None, overwrite=F
                 'seg_maps': seg_map
             }
             sava_numpy(save_path, curr)
-        except Exception as e:
-            print(f"Error in {data_list[i]}: {e}")
+        # except Exception as e:
+        #     print(f"Error in {data_list[i]}: {e}")
 
     mask_generator.predictor.model.to('cpu')
         
@@ -485,7 +485,8 @@ def sam_encoder(image_id, image, mode="bbox", masks_cache_dir=None):
         return seg_imgs, seg_map
     
     seg_images, seg_maps = {}, {}
-    seg_images['default'], seg_maps['default'] = mask2segmap(masks_default, image, mode=mode)
+    if len(masks_default) != 0:
+        seg_images['default'], seg_maps['default'] = mask2segmap(masks_default, image, mode=mode)
     if len(masks_s) != 0:
         seg_images['s'], seg_maps['s'] = mask2segmap(masks_s, image, mode=mode)
     if len(masks_m) != 0:
@@ -575,6 +576,9 @@ if __name__ == '__main__':
     for data_path in data_list:
         image_path = os.path.join(img_folder, data_path)
         image = cv2.imread(image_path)
+        if image is None:
+            print(f"Error reading {image_path}")
+            continue
 
         orig_w, orig_h = image.shape[1], image.shape[0]
         if args.resolution == -1:
@@ -610,4 +614,5 @@ if __name__ == '__main__':
     else:
         save_folder = os.path.join(dataset_path, f'language_features_{mode}{output_substring}')
     os.makedirs(save_folder, exist_ok=True)
+    # print(images[100])
     create(images, data_list, save_folder, masks_cache_dir=masks_cache_dir, overwrite=overwrite, mode=mode)

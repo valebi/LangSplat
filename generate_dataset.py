@@ -22,7 +22,18 @@ if platform.system() == "Linux":
 # file = "/home/bieriv/LangSplat/LangSplat/data/ams/ams.glb"
 #ile = "C:/MSC-Data/OpenCityData/brooklyn-bridge-ply/brooklyn-bridge.ply"
 # file = "/mnt/usb_ssd/opencity-data/data/utrecht/utrecht.glb"
-file = "/mnt/usb_ssd/opencity-data/data/denhaag/denhaag.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/denhaag/denhaag.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/sanjuan/sanjuan.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/detroit-3/detroit-3.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/seattle/seattle.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/boston/boston.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/miami/miami.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/sanfrancisco/sanfrancisco.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/delft-simplify/delft-simplify.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/maastricht/maastricht.glb"
+file = "/mnt/usb_ssd/opencity-data/data/losangeles/losangeles.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/eindhoven/eindhoven.glb"
+# file = "/mnt/usb_ssd/opencity-data/data/sanfrancisco-2/sanfrancisco-2.glb"
 if False:
     import open3d as o3d
     mesh = o3d.io.read_triangle_model(file, True)
@@ -35,7 +46,19 @@ if False:
 # output_path = "data/buenos-aires-squared-output-v3"
 # output_path = "data/ams-output-v2"
 # output_path = "/mnt/usb_ssd/opencity-data/data/utrecht-output-v1"
-output_path = "/mnt/usb_ssd/opencity-data/data/denhaag-output-sig-highlight"
+# output_path = "/mnt/usb_ssd/opencity-data/data/denhaag-output-sig-highlight"
+# output_path = "/mnt/usb_ssd/opencity-data/data/sanjuan-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/detroit-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/detroit-3-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/seattle-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/boston-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/miami-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/delft-details-reuse-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/maastricht-siglip-highlight"
+# output_path = "/mnt/usb_ssd/opencity-data/data/sanfrancisco-2-output"
+output_path = "/mnt/usb_ssd/opencity-data/data/losangeles-output"
+# output_path = "/mnt/usb_ssd/opencity-data/data/eindhoven-output"
+
 continue_from_last = True
 width = 384
 height = 384
@@ -74,9 +97,9 @@ border = 10 #300
 max_position_noise = 100
 xrange = [45, 65] # vertical angle (90 means bird view / satellite and 0 means horizontal / street view)
 yrange = [0, 360] # horizontal angle, we want to go round round round
-height_range = [25, 100] #[500, 550] # [50, 100]
+height_range =[175, 225] if "detroit" in output_path else ([25, 50] if "sanfrancisco" in output_path else [50, 150]) # [50, 100]
 n_retries = 7 # 7
-max_n_samples = 7500
+max_n_samples = 14000
 orth_prob = 0.3
 
 
@@ -88,6 +111,7 @@ if not os.path.isdir(output_path):
     os.mkdir(f"{output_path}/intrinsic")
 
 if continue_from_last: 
+    # counter = 0
     existing = [int(f.split(".")[0]) for f in os.listdir(f"{output_path}/depth")]
     counter = max(existing) if len(existing) > 0 else 0
     print(f"Continuing from image {counter}")
@@ -99,6 +123,7 @@ if not reuse_pose:
         for z_pos in np.linspace(bounds[0,2]+border, bounds[1,2]-border, int(np.sqrt(max_n_samples))):
             if os.path.exists(f"{output_path}/depth/{counter}.npy"):
                 counter += 1
+                print(f"Skipping image {counter}")
                 continue
             for i in range(n_retries):
                 random_height = np.random.randint(height_range[0], height_range[1])

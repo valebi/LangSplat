@@ -237,14 +237,30 @@ def load_data(obj_path, images_path, depth_path, feat_path, mask_path, poses_pat
         if full_embedding_path is None:
             raise ValueError("Full embeddings mode is enabled but no full embedding path is provided")
         full_embeddings = np.load(os.path.join(full_embedding_path, "embeddings.npy"))
-        images = [cv2.imread(path) for path in tqdm(sorted(glob.glob(os.path.join(images_path, "*.jpg"))), desc="Loading images")]
-        masks = [np.zeros((1,) + i.shape[:2], dtype=int) for i in images]
-        features = [np.expand_dims(full_embeddings[i], 0).astype(np.float16) for i in range(len(images))] 
-        depth_images = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(depth_path, "*.npy"))), desc="Loading depth images")]
+        image_files = sorted(glob.glob(os.path.join(images_path, "*.jpg")))
+        images = [cv2.imread(path) for path in tqdm(image_files, desc="Loading images")]
+        # mask = [i is not None for i in images if i is not None]
+        # images = [i for i in images if i is not None]
+        # mask = np.isnan(full_embeddings).any(axis=1)
+        # full_embeddings = full_embeddings[~mask]
+        masks = [np.zeros((1,) + i.shape[:2], dtype=int) for ix, i in enumerate(images)]
+        features = [np.expand_dims(full_embeddings[i], 0).astype(np.float16) for ix, i in enumerate(range(len(images)))] 
+        def numpy_try_load(path):
+            try:
+                return np.load(path).astype(np.float16)
+            except:
+                return None
+        depth_images = [numpy_try_load(path) for ix, path in tqdm(enumerate([f.replace(".jpg", ".npy").replace(images_path, depth_path) for f in image_files]), desc="Loading depth images")]
         # features = [np.load(path).astype(np.float16) for path in tqdm(sorted(glob.glob(os.path.join(feat_path, "*.npy"))), desc="Loading features")]
         # masks = [np.load(path) for path in tqdm(sorted(glob.glob(os.path.join(mask_path, "*.npy"))), desc="Loading masks")]
-        poses = [np.loadtxt(path) for path in tqdm(sorted(glob.glob(os.path.join(poses_path, "*.txt"))), desc="Loading poses")]
-        assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses)
+        poses = [np.loadtxt(path) for ix, path in tqdm(enumerate(sorted(glob.glob(os.path.join(poses_path, "*.txt")))), desc="Loading poses")]
+        depth_not_none_mask = [i is not None for i in depth_images]
+        images = [images[ix] for ix, i in enumerate(images) if depth_not_none_mask[ix]]
+        masks = [masks[ix] for ix, i in enumerate(masks) if depth_not_none_mask[ix]]
+        features = [features[ix] for ix, i in enumerate(features) if depth_not_none_mask[ix]]
+        poses = [poses[ix] for ix, i in enumerate(poses) if depth_not_none_mask[ix]]
+        depth_images = [depth_images[ix] for ix, i in enumerate(depth_images) if depth_not_none_mask[ix]]
+        assert len(images) == len(depth_images) == len(features) == len(masks) == len(poses), f"{len(images)} {len(depth_images)} {len(features)} {len(masks)} {len(poses)}"
     else: # True or not len(images) == len(depth_images) == len(features) == len(masks) == len(poses):
         # print("Warning: Number of images, depth images, features, masks and poses do not match")
         # if full_embeddings_mode:
@@ -278,7 +294,7 @@ def load_data(obj_path, images_path, depth_path, feat_path, mask_path, poses_pat
     return images, masks, points3D, poses, depth_images, features, intrinsics, n_levels
 
 
-def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(1*1e6)):
+def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, poses_path, intrinsics_path, output_path, full_embedding_path = None, full_embeddings_mode = False, max_points=int(0.5*1e6)):
     # mesh = o3d.io.read_point_cloud(ply_path)
     # mesh = o3d.io.read_triangle_model(obj_path)
     # try:
@@ -374,11 +390,12 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
                 # assert ((n_occurrences[:, position[1], position[0]]).astype(bool) == (mask_ix != -1)).all()
                 # point_features_sum[:, index] += pixel_wise_features[:, position[1], position[0]]
                 # n_observed[:, index] += n_occurrences[:, position[1], position[0]]
-                # if feat.shape[-1] != 512:
+                # if feat.shape[-1] != 1152 and not "gpt" in feat_path: # or feat.shape[0] != 4:
                 #     continue
                 # else:
-                #     point_features_sum[:, index] += feat
-                #     n_observed[:, index] += (mask_ix != -1)
+                if not np.isnan(feat).any():
+                    point_features_sum[:, index] += feat
+                    n_observed[:, index] += (mask_ix != -1)
         point_features_sum /= np.maximum(1, n_observed[:, :, None])
         point_features_sum = point_features_sum.astype(np.float16)
         
@@ -387,10 +404,18 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         print(f"[INFO] Minimum number of features per point: {np.min(n_observed)}")
         print(f"[INFO] Median number of features per point: {np.median(n_observed)}")
         print("[INFO] Point feature shape:", point_features_sum.shape)
+
+        os.makedirs(output_path, exist_ok=True)
         if "highlight" in feat_path:
-            np.save("/home/bieriv/LangSplat/LangSplat/data/rotterdam-output/point_features_langbase.npy", point_features_sum)
+            np.save(os.path.join(output_path, "point_features_ours.npy"), point_features_sum)
         else:
-            np.save("/mnt/usb_ssd/opencity-data/results/rotterdam-siglip/point_features.npy", point_features_sum)
+            np.save(os.path.join(output_path, "point_features_langsplat.npy"), point_features_sum)
+
+
+        # if "highlight" in feat_path:
+        #     np.save("/mnt/usb_ssd/opencity-data/results/denhaag-clip-bbox/point_features_highlight.npy", point_features_sum)
+        # else:
+        #     np.save("/mnt/usb_ssd/opencity-data/results/rotterdam-siglip-bbox/point_features.npy", point_features_sum)
 
     if True:
         # average colors
@@ -410,7 +435,11 @@ def convert_to_pcd(obj_path, images_path, depth_path, feat_path, mask_path, pose
         point_cloud.colors = o3d.utility.Vector3dVector(point_colors_sum)
         assert point_cloud.has_points()
         assert point_cloud.has_colors()
-        o3d.io.write_point_cloud("/mnt/usb_ssd/opencity-data/results/rotterdam-siglip/generated_pcd.ply", point_cloud)
+        print(f"Saving pcd under {os.path.join(output_path, 'generated_pcd.ply')}")
+        os.makedirs(output_path, exist_ok=True)
+        o3d.io.write_point_cloud(os.path.join(output_path, "generated_pcd.ply"), point_cloud)
+        print(f"Done.")
+        # o3d.io.write_point_cloud("/mnt/usb_ssd/opencity-data/results/rotterdam-siglip-bbox/generated_pcd.ply", point_cloud)
 
 
 if __name__ == "__main__":
@@ -418,10 +447,30 @@ if __name__ == "__main__":
         base_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge/"
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/brooklyn-bridge-obj/brooklyn-bridge.obj"
         full_embeddings_mode = False
-    elif True:
-        base_path = "/mnt/usb_ssd/opencity-data/data/rotterdam-output-v2/"
+    elif False:
+        base_path = "/mnt/usb_ssd/opencity-data/data/rotterdam-siglip-bbox/"
         obj_path = "/mnt/usb_ssd/opencity-data/data/rotterdam/rotterdam.obj"
+        output_path = "/mnt/usb_ssd/opencity-data/results/rotterdam-siglip-bbox/"
+        highlight = False
         full_embeddings_mode = False
+    elif False:
+        obj_path = "/mnt/usb_ssd/opencity-data/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
+        base_path = "/mnt/usb_ssd/opencity-data/data/buenos-aires-squared-output-v3/"
+        output_path = "/mnt/usb_ssd/opencity-data/results/buenos-aires-squared-output-v3-gpt/"
+        full_embeddings_mode = True
+        highlight = True
+    elif True:
+        base_path = "/mnt/usb_ssd/opencity-data/data/boston-output/"
+        obj_path = "/mnt/usb_ssd/opencity-data/data/boston/boston.obj"
+        output_path = "/mnt/usb_ssd/opencity-data/results/boston-output/"
+        highlight = True
+        full_embeddings_mode = True
+    elif False:
+        base_path = "/mnt/usb_ssd/opencity-data/data/miami-output/"
+        obj_path = "/mnt/usb_ssd/opencity-data/data/miami/miami.obj"
+        highlight = True
+        output_path = "/mnt/usb_ssd/opencity-data/data/miami-output/"
+        full_embeddings_mode = True
     elif False:
         base_path = "/home/bieriv/LangSplat/LangSplat/data/eth-output-v1/"
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/eth/eth.glb"
@@ -434,17 +483,44 @@ if __name__ == "__main__":
         base_path = "/home/bieriv/LangSplat/LangSplat/data/delft-output-v1/"
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/delft/delft.glb"
         full_embeddings_mode = False
-    else:
+    elif False:
         obj_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared/buenos-aires-squared-shifted.obj"
         base_path = "/home/bieriv/LangSplat/LangSplat/data/buenos-aires-squared-output-v3/"
         full_embeddings_mode = True
-    convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
-                    images_path= base_path + "color",
-                    depth_path = base_path + "depth",
-                    feat_path = base_path + "language_features",
-                    mask_path = base_path + "language_features",
-                    full_embedding_path = base_path + "full_image_embeddings",
-                    poses_path = base_path + "pose",
-                    intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
-                    output_path = "semantic_point_cloud.ply",
-                    full_embeddings_mode = full_embeddings_mode)
+    elif False:
+        base_path = "/mnt/usb_ssd/opencity-data/data/utrecht-clip-bbox/"
+        obj_path = "/mnt/usb_ssd/opencity-data/data/utrecht/utrecht.glb"
+        full_embeddings_mode = True
+    elif False:
+        base_path = "/mnt/usb_ssd/opencity-data/data/denaag-output-clip-bbox/"
+        obj_path = "/mnt/usb_ssd/opencity-data/data/denhaag/denhaag.glb"
+        full_embeddings_mode = True
+    elif False:
+        base_path = "/mnt/usb_ssd/opencity-data/data/delft-details-output/"
+        obj_path = "/mnt/usb_ssd/opencity-data/data/delft-details/delft-details-rescale.glb"
+        output_path = "/mnt/usb_ssd/opencity-data/results/delft-details-sig-highlight/"
+        highlight = True
+        full_embeddings_mode = False
+    
+    if highlight == True:
+        convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
+                        images_path= base_path + "color",
+                        depth_path = base_path + "depth",
+                        feat_path = base_path + "language_features_highlight",
+                        mask_path = base_path + "language_features_highlight",
+                        full_embedding_path = base_path + ("full_image_embeddings_siglip" if "gpt" not in output_path else "full_image_embeddings_gpt"),
+                        poses_path = base_path + "pose",
+                        intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
+                        output_path = output_path,
+                        full_embeddings_mode = full_embeddings_mode)
+    else:
+        convert_to_pcd(obj_path = obj_path, #"scene_example_downsampled.ply",
+                images_path= base_path + "color",
+                depth_path = base_path + "depth",
+                feat_path = base_path + "language_features",
+                mask_path = base_path + "language_features",
+                full_embedding_path = base_path + "full_image_embeddings",
+                poses_path = base_path + "pose",
+                intrinsics_path = base_path + "intrinsic/projection_matrix.txt",
+                output_path = output_path,
+                full_embeddings_mode = full_embeddings_mode)
